@@ -6,20 +6,31 @@ const { GoogleGenAI } = require("@google/genai");
 
 dotenv.config();
 
+// =====================================
+// 基本設定
+// =====================================
+
 const app = express();
 
-const SERVER_VERSION = "separated-result-v4";
+const SERVER_VERSION = "context-time-location-v7";
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    files: 10,
-    fileSize: 10 * 1024 * 1024
-  }
-});
+const PORT = process.env.PORT || 3000;
+
+const MAX_PHOTO_COUNT = 10;
+const MAX_AI_PHOTO_COUNT = 3;
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 app.use(cors());
 app.use(express.json());
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    files: MAX_PHOTO_COUNT,
+    fileSize: MAX_FILE_SIZE
+  }
+});
 
 // =====================================
 // Gemini初期化
@@ -27,7 +38,7 @@ app.use(express.json());
 
 if (!process.env.GEMINI_API_KEY) {
   console.error(
-    "注意：GEMINI_API_KEY が環境変数に設定されていません"
+    "注意：GEMINI_API_KEYが環境変数に設定されていません。"
   );
 }
 
@@ -36,7 +47,7 @@ const ai = new GoogleGenAI({
 });
 
 // =====================================
-// JSON Schema
+// Geminiの出力形式
 // =====================================
 
 const analysisSchema = {
@@ -64,7 +75,7 @@ const analysisSchema = {
       minimum: 0,
       maximum: 5,
       description:
-        "家族、友人、仲間など人との関わりを0から5までの整数で評価する"
+        "家族、友人、仲間など、人との関わりを0から5までの整数で評価する"
     },
 
     learning: {
@@ -86,25 +97,25 @@ const analysisSchema = {
     summary: {
       type: "string",
       description:
-        "写真に直接写っている人物、物、場所、行動、雰囲気だけを説明する。メモ、日時、位置情報、予定は使わない"
+        "写真だけから確認できる人物、物、場所、行動、表情、雰囲気を説明する。メモ、日時、位置情報、カレンダー予定は使わない"
     },
 
     contextMeaning: {
       type: "string",
       description:
-        "カテゴリ、本人のメモ、撮影日時、位置情報、カレンダー予定から分かる撮影時の背景や状況を説明する。写真の視覚的説明を繰り返さない"
+        "カテゴリ、本人のメモ、撮影日時、位置情報、カレンダー予定から分かる撮影時の背景や状況を説明する。撮影日時がある場合は日付または時間帯に触れ、位置情報がある場合はその存在に触れ、予定がある場合は写真との関係に触れる"
     },
 
     valueReason: {
       type: "string",
       description:
-        "この時間が本人にとって、なぜ将来残す価値のある時間なのかを説明する。写真の見た目や撮影状況の説明だけにしない"
+        "この時間が本人にとって、なぜ将来残す価値のある時間なのかを説明する"
     },
 
     reason: {
       type: "string",
       description:
-        "emotion、experience、people、learning、specialの5項目について、それぞれ何点にしたかと具体的な採点根拠だけを説明する"
+        "emotion、experience、people、learning、specialの5項目について、それぞれ何点にしたかと具体的な採点根拠を説明する"
     }
   },
 
@@ -151,9 +162,11 @@ app.get("/analyze-test", async (req, res) => {
       contents: [
         {
           role: "user",
+
           parts: [
             {
-              text: 'JSONで {"status":"ok"} のみ返してください。'
+              text:
+                'JSONで {"status":"ok"} のみ返してください。'
             }
           ]
         }
@@ -161,6 +174,7 @@ app.get("/analyze-test", async (req, res) => {
 
       config: {
         responseMimeType: "application/json",
+
         responseSchema: {
           type: "object",
 
@@ -176,7 +190,10 @@ app.get("/analyze-test", async (req, res) => {
     });
 
     const responseText = response.text || "{}";
-    const result = JSON.parse(cleanJsonText(responseText));
+
+    const result = JSON.parse(
+      cleanJsonText(responseText)
+    );
 
     return res.json({
       status: "ok",
@@ -185,7 +202,10 @@ app.get("/analyze-test", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Gemini接続確認エラー:", error);
+    console.error(
+      "Gemini接続確認エラー:",
+      error
+    );
 
     return res.status(500).json({
       status: "error",
@@ -204,41 +224,27 @@ app.post(
   upload.array("photos"),
   async (req, res) => {
     try {
-      const memo = String(req.body.memo || "").trim();
-      const category = String(req.body.category || "").trim();
+      const memo = String(
+        req.body.memo || ""
+      ).trim();
+
+      const category = String(
+        req.body.category || ""
+      ).trim();
+
       const files = req.files || [];
 
-      let photoContexts = [];
-
-      try {
-        const parsed = JSON.parse(
-          req.body.photoContexts || "[]"
+      const photoContexts =
+        parsePhotoContexts(
+          req.body.photoContexts
         );
 
-        photoContexts = Array.isArray(parsed)
-          ? parsed
-          : [];
-
-      } catch (error) {
-        console.error(
-          "photoContexts解析エラー:",
-          error
-        );
-
-        photoContexts = [];
-      }
-
-      console.log("====================================");
-      console.log("AIリクエストを受信しました");
-      console.log("サーバーバージョン:", SERVER_VERSION);
-      console.log("カテゴリ:", category);
-      console.log("メモ:", memo);
-      console.log("写真枚数:", files.length);
-      console.log(
-        "写真情報:",
-        JSON.stringify(photoContexts, null, 2)
-      );
-      console.log("====================================");
+      logRequestInformation({
+        category,
+        memo,
+        files,
+        photoContexts
+      });
 
       if (files.length === 0) {
         return res.status(400).json({
@@ -250,25 +256,26 @@ app.post(
 
       // Geminiへ送信する写真は最大3枚
       const imageParts = files
-        .slice(0, 3)
-        .map((file) => ({
-          inlineData: {
-            mimeType:
-              file.mimetype || "image/jpeg",
+        .slice(0, MAX_AI_PHOTO_COUNT)
+        .map(createImagePart);
 
-            data:
-              file.buffer.toString("base64")
-          }
-        }));
+      // AIが理解しやすい文章形式へ変換
+      const formattedPhotoContexts =
+        formatPhotoContexts(
+          photoContexts
+        );
 
-      const prompt = createAnalysisPrompt({
-        category,
-        memo,
-        photoContexts,
-        fileCount: files.length
-      });
+      const prompt =
+        createAnalysisPrompt({
+          category,
+          memo,
+          fileCount: files.length,
+          formattedPhotoContexts
+        });
 
-      console.log("Geminiへ送信中...");
+      console.log(
+        "Geminiへ送信中..."
+      );
 
       const response =
         await ai.models.generateContent({
@@ -314,156 +321,87 @@ app.post(
         );
       }
 
-      let result;
-
-      try {
-        result = JSON.parse(
-          cleanJsonText(responseText)
-        );
-
-      } catch (error) {
-        console.error(
-          "JSON解析対象:",
+      const result =
+        parseGeminiResponse(
           responseText
         );
 
-        throw new Error(
-          "Geminiの応答をJSONとして解析できませんでした：" +
-          error.message
-        );
-      }
+      const scores =
+        normalizeScores(result);
 
-      // =================================
-      // 点数を0～5に補正
-      // =================================
+      let descriptions =
+        normalizeDescriptions(result);
 
-      const emotion =
-        normalizeScore(result.emotion);
-
-      const experience =
-        normalizeScore(result.experience);
-
-      const people =
-        normalizeScore(result.people);
-
-      const learning =
-        normalizeScore(result.learning);
-
-      const special =
-        normalizeScore(result.special);
-
-      // =================================
-      // 各文章を別々に取得
-      // =================================
-
-      let summary = normalizeText(
-        result.summary,
-        "写真そのものの意味を取得できませんでした。"
-      );
-
-      let contextMeaning = normalizeText(
-        result.contextMeaning,
-        "日時やメモなどから文脈的な意味を取得できませんでした。"
-      );
-
-      let valueReason = normalizeText(
-        result.valueReason,
-        "この時間が持つ価値の理由を取得できませんでした。"
-      );
-
-      let reason = normalizeText(
-        result.reason,
-        "各項目の点数評価理由を取得できませんでした。"
-      );
-
-      // =================================
-      // 同一文章チェック
-      // =================================
-
+      // 同じ文章が含まれていた場合は再生成
       const duplicateFields =
-        findDuplicateFields({
-          summary,
-          contextMeaning,
-          valueReason,
-          reason
-        });
+        findDuplicateFields(
+          descriptions
+        );
 
       if (duplicateFields.length > 0) {
         console.warn(
-          "文章の重複を検出:",
+          "文章の重複を検出しました:",
           duplicateFields
         );
 
-        const regenerated =
+        descriptions =
           await regenerateDescriptions({
             category,
             memo,
-            photoContexts,
-            summary,
-            contextMeaning,
-            valueReason,
-            reason,
-            scores: {
-              emotion,
-              experience,
-              people,
-              learning,
-              special
-            }
+            formattedPhotoContexts,
+            descriptions,
+            scores
           });
-
-        summary = normalizeText(
-          regenerated.summary,
-          summary
-        );
-
-        contextMeaning = normalizeText(
-          regenerated.contextMeaning,
-          contextMeaning
-        );
-
-        valueReason = normalizeText(
-          regenerated.valueReason,
-          valueReason
-        );
-
-        reason = normalizeText(
-          regenerated.reason,
-          reason
-        );
       }
 
       const onePhotoScore =
-        emotion +
-        experience +
-        people +
-        learning +
-        special;
+        calculateScore(scores);
 
       /*
-        現在は写真群全体を1回で評価しているため、
+        現在は写真全体を1回で評価しているため、
         写真枚数は掛けません。
       */
-      const totalScore = onePhotoScore;
+      const totalScore =
+        onePhotoScore;
 
       const responseData = {
         status: "ok",
-        serverVersion: SERVER_VERSION,
 
-        emotion,
-        experience,
-        people,
-        learning,
-        special,
+        serverVersion:
+          SERVER_VERSION,
 
-        summary,
-        contextMeaning,
-        valueReason,
-        reason,
+        emotion:
+          scores.emotion,
+
+        experience:
+          scores.experience,
+
+        people:
+          scores.people,
+
+        learning:
+          scores.learning,
+
+        special:
+          scores.special,
+
+        summary:
+          descriptions.summary,
+
+        contextMeaning:
+          descriptions.contextMeaning,
+
+        valueReason:
+          descriptions.valueReason,
+
+        reason:
+          descriptions.reason,
 
         onePhotoScore,
         totalScore,
-        photoCount: files.length
+
+        photoCount:
+          files.length
       };
 
       console.log(
@@ -478,7 +416,9 @@ app.post(
         )
       );
 
-      return res.json(responseData);
+      return res.json(
+        responseData
+      );
 
     } catch (error) {
       console.error(
@@ -502,21 +442,278 @@ app.post(
 );
 
 // =====================================
+// 写真情報の解析
+// =====================================
+
+function parsePhotoContexts(
+  photoContextsText
+) {
+  try {
+    const parsed = JSON.parse(
+      photoContextsText || "[]"
+    );
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed;
+
+  } catch (error) {
+    console.error(
+      "photoContexts解析エラー:",
+      error
+    );
+
+    return [];
+  }
+}
+
+// =====================================
+// Gemini用画像データ作成
+// =====================================
+
+function createImagePart(file) {
+  return {
+    inlineData: {
+      mimeType:
+        file.mimetype ||
+        "image/jpeg",
+
+      data:
+        file.buffer.toString(
+          "base64"
+        )
+    }
+  };
+}
+
+// =====================================
+// 写真情報を読みやすい文章へ変換
+// =====================================
+
+function formatPhotoContexts(
+  photoContexts
+) {
+  if (
+    !Array.isArray(photoContexts) ||
+    photoContexts.length === 0
+  ) {
+    return "写真の付随情報はありません。";
+  }
+
+  return photoContexts
+    .map((photo, index) => {
+      const takenDate =
+        formatDateValue(
+          photo.takenDate
+        );
+
+      const latitude =
+        normalizeNullableValue(
+          photo.latitude
+        );
+
+      const longitude =
+        normalizeNullableValue(
+          photo.longitude
+        );
+
+      const locationText =
+        createLocationText(
+          latitude,
+          longitude
+        );
+
+      const eventText =
+        createCalendarEventText(
+          photo.relatedEvent
+        );
+
+      const fileName =
+        normalizeNullableValue(
+          photo.fileName
+        );
+
+      const dateSource =
+        normalizeNullableValue(
+          photo.dateSource
+        );
+
+      const gpsSource =
+        normalizeNullableValue(
+          photo.gpsSource
+        );
+
+      return `
+【写真${index + 1}】
+
+ファイル名：
+${fileName}
+
+撮影日時：
+${takenDate}
+
+撮影日時の取得元：
+${dateSource}
+
+位置情報：
+${locationText}
+
+位置情報の取得元：
+${gpsSource}
+
+関連するカレンダー予定：
+${eventText}
+`.trim();
+    })
+    .join("\n\n");
+}
+
+// =====================================
+// 撮影日時を整形
+// =====================================
+
+function formatDateValue(value) {
+  if (!value) {
+    return "取得できません";
+  }
+
+  const date = new Date(value);
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return String(value);
+  }
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(2, "0");
+
+  const hours =
+    String(
+      date.getHours()
+    ).padStart(2, "0");
+
+  const minutes =
+    String(
+      date.getMinutes()
+    ).padStart(2, "0");
+
+  const seconds =
+    String(
+      date.getSeconds()
+    ).padStart(2, "0");
+
+  return (
+    `${year}年${month}月${day}日 ` +
+    `${hours}時${minutes}分${seconds}秒`
+  );
+}
+
+// =====================================
+// 位置情報を文章化
+// =====================================
+
+function createLocationText(
+  latitude,
+  longitude
+) {
+  const hasLatitude =
+    latitude !== "取得できません";
+
+  const hasLongitude =
+    longitude !== "取得できません";
+
+  if (
+    !hasLatitude ||
+    !hasLongitude
+  ) {
+    return "位置情報を取得できません";
+  }
+
+  return (
+    `緯度 ${latitude}、` +
+    `経度 ${longitude} が記録されています。` +
+    "地名は断定せず、位置情報が存在することだけを利用してください。"
+  );
+}
+
+// =====================================
+// カレンダー予定を文章化
+// =====================================
+
+function createCalendarEventText(
+  relatedEvent
+) {
+  if (
+    !relatedEvent ||
+    typeof relatedEvent !== "object"
+  ) {
+    return "関連する予定はありません";
+  }
+
+  const title =
+    relatedEvent.summary ||
+    "タイトルなし";
+
+  const start =
+    relatedEvent.start?.dateTime ||
+    relatedEvent.start?.date ||
+    null;
+
+  const end =
+    relatedEvent.end?.dateTime ||
+    relatedEvent.end?.date ||
+    null;
+
+  const startText =
+    start
+      ? formatDateValue(start)
+      : "開始時刻不明";
+
+  const endText =
+    end
+      ? formatDateValue(end)
+      : "終了時刻不明";
+
+  return (
+    `予定名：${title}\n` +
+    `開始：${startText}\n` +
+    `終了：${endText}`
+  );
+}
+
+// =====================================
 // プロンプト生成
 // =====================================
 
 function createAnalysisPrompt({
   category,
   memo,
-  photoContexts,
-  fileCount
+  fileCount,
+  formattedPhotoContexts
 }) {
   return `
 あなたは「時間の価値の可視化」アプリで使用する分析AIです。
 
-写真と付随情報を分析し、4種類の文章を、それぞれ異なる観点から作成してください。
+写真と付随情報を分析し、以下の4種類の文章を、それぞれ異なる観点から作成してください。
 
+=====================================
 【1：summary】
+=====================================
 
 写真に直接写っている内容だけを説明してください。
 
@@ -528,37 +725,53 @@ function createAnalysisPrompt({
 ・表情
 ・雰囲気
 
-禁止：
-・本人のメモを使うこと
-・日時を使うこと
-・位置情報を使うこと
-・カレンダー予定を使うこと
-・写真に写っていない出来事を断定すること
+使用してはいけない情報：
+・本人のメモ
+・撮影日時
+・位置情報
+・カレンダー予定
 
-summaryは、写真の視覚的説明です。
+注意：
+・写真に写っていない出来事を断定しないでください。
+・summaryは写真の視覚的な内容だけを書いてください。
 
+=====================================
 【2：contextMeaning】
+=====================================
 
 写真の付随情報から、撮影時の背景や状況を説明してください。
 
-使用してよい情報：
+使用する情報：
 ・カテゴリ
 ・本人のメモ
 ・撮影日時
 ・位置情報
 ・カレンダー予定
 
+必ず行うこと：
+・撮影日時が存在する場合は、日付または時間帯に必ず触れてください。
+・位置情報が存在する場合は、位置情報が記録されていることに必ず触れてください。
+・カレンダー予定が存在する場合は、その予定と写真の関係を説明してください。
+・本人のメモが存在する場合は、その出来事が本人にとってどのような状況だったか説明してください。
+・利用できる付随情報を無視せず、文章へ反映してください。
+
 禁止：
 ・summaryと同じ写真説明を繰り返すこと
-・存在しない位置情報や予定を作ること
+・緯度や経度だけから地名や施設名を断定すること
+・存在しない予定や位置情報を作ること
+・日時や位置情報があるのに、それらへ一切触れないこと
 
-contextMeaningは、撮影時の状況や背景です。
+contextMeaningは、
+日時・場所・予定・メモから分かる撮影時の背景です。
 
+=====================================
 【3：valueReason】
+=====================================
 
-この時間が本人にとって、なぜ将来残す価値のある時間なのかを説明してください。
+この時間が本人にとって、
+なぜ将来残す価値のある時間なのかを説明してください。
 
-観点：
+考慮する観点：
 ・感情
 ・経験
 ・人との関係
@@ -571,11 +784,15 @@ contextMeaningは、撮影時の状況や背景です。
 ・撮影日時や予定を並べるだけにすること
 ・点数の説明をすること
 
-valueReasonは、この思い出を残す価値の説明です。
+valueReasonは、
+この思い出を将来残す価値の説明です。
 
+=====================================
 【4：reason】
+=====================================
 
-以下の5項目について、何点にしたかと、その具体的な採点根拠を説明してください。
+以下の5項目について、
+何点にしたかと具体的な採点根拠を説明してください。
 
 ・emotion
 ・experience
@@ -588,9 +805,12 @@ valueReasonは、この思い出を残す価値の説明です。
 ・思い出を残す価値だけを書くこと
 ・summary、contextMeaning、valueReasonをまとめ直すこと
 
-reasonは、5項目の採点理由です。
+reasonは、
+5項目の点数評価の理由です。
 
+=====================================
 【入力情報】
+=====================================
 
 カテゴリ：
 ${category || "未設定"}
@@ -598,13 +818,16 @@ ${category || "未設定"}
 本人のメモ：
 ${memo || "メモなし"}
 
-写真枚数：
+選択された写真枚数：
 ${fileCount}枚
 
 写真の付随情報：
-${JSON.stringify(photoContexts, null, 2)}
 
+${formattedPhotoContexts}
+
+=====================================
 【評価基準】
+=====================================
 
 emotion：
 本人の感情や印象の強さ
@@ -613,7 +836,7 @@ experience：
 経験の新しさ、挑戦、非日常性
 
 people：
-家族、友人、仲間など人との関わり
+家族、友人、仲間など、人との関わり
 
 learning：
 学び、気付き、成長
@@ -623,18 +846,131 @@ special：
 
 各項目を0から5までの整数で評価してください。
 
+=====================================
 【重要な制約】
+=====================================
 
 ・summary、contextMeaning、valueReason、reasonは必ず異なる文章にしてください。
 ・同じ文章を複数項目へ書かないでください。
 ・単なる言い換えも避けてください。
-・各文章は1～3文で書いてください。
+・各文章は1文から3文で書いてください。
 ・不明な情報を事実として断定しないでください。
+・撮影日時がある場合は、contextMeaningで必ず触れてください。
+・位置情報がある場合は、contextMeaningで必ず触れてください。
+・カレンダー予定がある場合は、contextMeaningで必ず写真との関係に触れてください。
 ・位置情報がない場合は、場所を推測しないでください。
 ・予定がない場合は、予定を作らないでください。
 ・空文字は禁止です。
 ・JSON以外は出力しないでください。
 `;
+}
+
+// =====================================
+// Gemini応答解析
+// =====================================
+
+function parseGeminiResponse(
+  responseText
+) {
+  try {
+    return JSON.parse(
+      cleanJsonText(
+        responseText
+      )
+    );
+
+  } catch (error) {
+    console.error(
+      "JSON解析対象:",
+      responseText
+    );
+
+    throw new Error(
+      "Geminiの応答をJSONとして解析できませんでした：" +
+      error.message
+    );
+  }
+}
+
+// =====================================
+// 点数補正
+// =====================================
+
+function normalizeScores(result) {
+  return {
+    emotion:
+      normalizeScore(
+        result.emotion
+      ),
+
+    experience:
+      normalizeScore(
+        result.experience
+      ),
+
+    people:
+      normalizeScore(
+        result.people
+      ),
+
+    learning:
+      normalizeScore(
+        result.learning
+      ),
+
+    special:
+      normalizeScore(
+        result.special
+      )
+  };
+}
+
+// =====================================
+// 文章補正
+// =====================================
+
+function normalizeDescriptions(
+  result
+) {
+  return {
+    summary:
+      normalizeText(
+        result.summary,
+        "写真そのものの意味を取得できませんでした。"
+      ),
+
+    contextMeaning:
+      normalizeText(
+        result.contextMeaning,
+        "日時やメモなどから文脈的な意味を取得できませんでした。"
+      ),
+
+    valueReason:
+      normalizeText(
+        result.valueReason,
+        "この時間が持つ価値の理由を取得できませんでした。"
+      ),
+
+    reason:
+      normalizeText(
+        result.reason,
+        "各項目の点数評価理由を取得できませんでした。"
+      )
+  };
+}
+
+// =====================================
+// 合計点計算
+// =====================================
+
+function calculateScore(scores) {
+  return (
+    scores.emotion +
+    scores.experience +
+    scores.people +
+    scores.learning +
+    scores.special
+  );
 }
 
 // =====================================
@@ -644,23 +980,23 @@ special：
 async function regenerateDescriptions({
   category,
   memo,
-  photoContexts,
-  summary,
-  contextMeaning,
-  valueReason,
-  reason,
+  formattedPhotoContexts,
+  descriptions,
   scores
 }) {
   const prompt = `
 以下の4文章には、内容の重複または役割の混在があります。
 
-4つをそれぞれ異なる役割の文章として書き直してください。
+それぞれ異なる役割の文章として書き直してください。
 
 summary：
 写真に視覚的に写っている内容だけを書く。
 
 contextMeaning：
-カテゴリ、メモ、日時、位置、予定から分かる背景だけを書く。
+カテゴリ、メモ、撮影日時、位置情報、予定から分かる背景だけを書く。
+日時がある場合は日付または時間帯に触れてください。
+位置情報がある場合は位置情報が記録されていることに触れてください。
+予定がある場合は写真との関係に触れてください。
 
 valueReason：
 この時間を将来残す価値だけを書く。
@@ -671,16 +1007,16 @@ reason：
 【現在の文章】
 
 summary：
-${summary}
+${descriptions.summary}
 
 contextMeaning：
-${contextMeaning}
+${descriptions.contextMeaning}
 
 valueReason：
-${valueReason}
+${descriptions.valueReason}
 
 reason：
-${reason}
+${descriptions.reason}
 
 【入力情報】
 
@@ -691,12 +1027,14 @@ ${category || "未設定"}
 ${memo || "メモなし"}
 
 写真情報：
-${JSON.stringify(photoContexts, null, 2)}
+${formattedPhotoContexts}
 
 点数：
 ${JSON.stringify(scores, null, 2)}
 
-4文章は同じ内容にせず、それぞれ1～3文で書いてください。
+4文章は同じ内容にせず、
+それぞれ1文から3文で書いてください。
+
 JSON以外は出力しないでください。
 `;
 
@@ -707,6 +1045,7 @@ JSON以外は出力しないでください。
       contents: [
         {
           role: "user",
+
           parts: [
             {
               text: prompt
@@ -732,19 +1071,19 @@ JSON以外は出力しないでください。
             contextMeaning: {
               type: "string",
               description:
-                "付随情報から分かる背景だけを書く"
+                "日時、位置情報、予定、メモから分かる背景を書く"
             },
 
             valueReason: {
               type: "string",
               description:
-                "この時間を残す価値だけを書く"
+                "この時間を残す価値を書く"
             },
 
             reason: {
               type: "string",
               description:
-                "5項目の点数と採点根拠だけを書く"
+                "5項目の点数と採点根拠を書く"
             }
           },
 
@@ -760,67 +1099,127 @@ JSON以外は出力しないでください。
       }
     });
 
-  const text = response.text || "{}";
+  const responseText =
+    response.text || "{}";
 
-  return JSON.parse(
-    cleanJsonText(text)
-  );
+  const regenerated =
+    JSON.parse(
+      cleanJsonText(
+        responseText
+      )
+    );
+
+  return {
+    summary:
+      normalizeText(
+        regenerated.summary,
+        descriptions.summary
+      ),
+
+    contextMeaning:
+      normalizeText(
+        regenerated.contextMeaning,
+        descriptions.contextMeaning
+      ),
+
+    valueReason:
+      normalizeText(
+        regenerated.valueReason,
+        descriptions.valueReason
+      ),
+
+    reason:
+      normalizeText(
+        regenerated.reason,
+        descriptions.reason
+      )
+  };
 }
 
 // =====================================
-// 補助関数
+// 重複確認
 // =====================================
 
-function cleanJsonText(text) {
-  return String(text || "")
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
-}
+function findDuplicateFields(
+  descriptions
+) {
+  const entries = [
+    [
+      "summary",
+      descriptions.summary
+    ],
 
-function normalizeScore(value) {
-  const number = Number(value);
+    [
+      "contextMeaning",
+      descriptions.contextMeaning
+    ],
 
-  if (!Number.isFinite(number)) {
-    return 0;
+    [
+      "valueReason",
+      descriptions.valueReason
+    ],
+
+    [
+      "reason",
+      descriptions.reason
+    ]
+  ];
+
+  const duplicates = [];
+
+  for (
+    let i = 0;
+    i < entries.length;
+    i++
+  ) {
+    for (
+      let j = i + 1;
+      j < entries.length;
+      j++
+    ) {
+      const [
+        nameA,
+        textA
+      ] = entries[i];
+
+      const [
+        nameB,
+        textB
+      ] = entries[j];
+
+      if (
+        areTextsSimilar(
+          textA,
+          textB
+        )
+      ) {
+        duplicates.push(
+          `${nameA}と${nameB}`
+        );
+      }
+    }
   }
 
-  return Math.max(
-    0,
-    Math.min(
-      5,
-      Math.round(number)
-    )
-  );
+  return duplicates;
 }
 
-function normalizeText(value, fallback) {
-  if (typeof value !== "string") {
-    return fallback;
-  }
+// =====================================
+// 文章類似判定
+// =====================================
 
-  const text = value.trim();
-
-  if (!text) {
-    return fallback;
-  }
-
-  return text;
-}
-
-function normalizeForComparison(text) {
-  return String(text || "")
-    .replace(/\s+/g, "")
-    .replace(/[。、,.!?！？「」『』（）()]/g, "")
-    .toLowerCase();
-}
-
-function areTextsSimilar(textA, textB) {
+function areTextsSimilar(
+  textA,
+  textB
+) {
   const a =
-    normalizeForComparison(textA);
+    normalizeForComparison(
+      textA
+    );
 
   const b =
-    normalizeForComparison(textB);
+    normalizeForComparison(
+      textB
+    );
 
   if (!a || !b) {
     return false;
@@ -847,79 +1246,198 @@ function areTextsSimilar(textA, textB) {
       ? a
       : b;
 
-  let matchedCharacters = 0;
+  let matchedCount = 0;
 
-  for (const character of shorter) {
-    if (longer.includes(character)) {
-      matchedCharacters++;
+  for (
+    const character
+    of shorter
+  ) {
+    if (
+      longer.includes(
+        character
+      )
+    ) {
+      matchedCount++;
     }
   }
 
   const similarity =
-    matchedCharacters /
+    matchedCount /
     shorter.length;
 
   return similarity >= 0.9;
 }
 
-function findDuplicateFields({
-  summary,
-  contextMeaning,
-  valueReason,
-  reason
-}) {
-  const entries = [
-    ["summary", summary],
-    ["contextMeaning", contextMeaning],
-    ["valueReason", valueReason],
-    ["reason", reason]
-  ];
+// =====================================
+// 比較用文字列整形
+// =====================================
 
-  const duplicates = [];
+function normalizeForComparison(
+  text
+) {
+  return String(text || "")
+    .replace(/\s+/g, "")
+    .replace(
+      /[。、,.!?！？「」『』（）()]/g,
+      ""
+    )
+    .toLowerCase();
+}
 
-  for (
-    let i = 0;
-    i < entries.length;
-    i++
+// =====================================
+// JSON文字列整形
+// =====================================
+
+function cleanJsonText(text) {
+  return String(text || "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+}
+
+// =====================================
+// 点数を0～5へ補正
+// =====================================
+
+function normalizeScore(value) {
+  const number =
+    Number(value);
+
+  if (
+    !Number.isFinite(
+      number
+    )
   ) {
-    for (
-      let j = i + 1;
-      j < entries.length;
-      j++
-    ) {
-      const [nameA, textA] =
-        entries[i];
-
-      const [nameB, textB] =
-        entries[j];
-
-      if (
-        areTextsSimilar(
-          textA,
-          textB
-        )
-      ) {
-        duplicates.push(
-          `${nameA}と${nameB}`
-        );
-      }
-    }
+    return 0;
   }
 
-  return duplicates;
+  return Math.max(
+    0,
+    Math.min(
+      5,
+      Math.round(number)
+    )
+  );
+}
+
+// =====================================
+// 文章の空欄補正
+// =====================================
+
+function normalizeText(
+  value,
+  fallback
+) {
+  if (
+    typeof value !== "string"
+  ) {
+    return fallback;
+  }
+
+  const text =
+    value.trim();
+
+  if (!text) {
+    return fallback;
+  }
+
+  return text;
+}
+
+// =====================================
+// nullや空欄の補正
+// =====================================
+
+function normalizeNullableValue(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "取得できません";
+  }
+
+  return String(value);
+}
+
+// =====================================
+// リクエストログ
+// =====================================
+
+function logRequestInformation({
+  category,
+  memo,
+  files,
+  photoContexts
+}) {
+  console.log(
+    "===================================="
+  );
+
+  console.log(
+    "AIリクエストを受信しました"
+  );
+
+  console.log(
+    "サーバーバージョン:",
+    SERVER_VERSION
+  );
+
+  console.log(
+    "カテゴリ:",
+    category
+  );
+
+  console.log(
+    "メモ:",
+    memo
+  );
+
+  console.log(
+    "写真枚数:",
+    files.length
+  );
+
+  console.log(
+    "写真情報:",
+    JSON.stringify(
+      photoContexts,
+      null,
+      2
+    )
+  );
+
+  console.log(
+    "===================================="
+  );
 }
 
 // =====================================
 // サーバー起動
 // =====================================
 
-const port =
-  process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(
+    "================================"
+  );
 
-app.listen(port, () => {
-  console.log("================================");
-  console.log("Server running!");
-  console.log("Version:", SERVER_VERSION);
-  console.log("Port:", port);
-  console.log("================================");
+  console.log(
+    "Server running!"
+  );
+
+  console.log(
+    "Version:",
+    SERVER_VERSION
+  );
+
+  console.log(
+    "Port:",
+    PORT
+  );
+
+  console.log(
+    "================================"
+  );
 });
