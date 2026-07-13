@@ -12,9 +12,12 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "context-time-location-v7";
+const SERVER_VERSION = "context-time-location-jst-v9";
 
 const PORT = process.env.PORT || 3000;
+
+// 日時は必ず日本時間で扱う
+const APP_TIME_ZONE = "Asia/Tokyo";
 
 const MAX_PHOTO_COUNT = 10;
 const MAX_AI_PHOTO_COUNT = 3;
@@ -97,13 +100,13 @@ const analysisSchema = {
     summary: {
       type: "string",
       description:
-        "写真だけから確認できる人物、物、場所、行動、表情、雰囲気を説明する。メモ、日時、位置情報、カレンダー予定は使わない"
+        "写真だけから視覚的に確認できる人物、物、場所、行動、表情、雰囲気を説明する。メモ、日時、位置情報、カレンダー予定は使わない"
     },
 
     contextMeaning: {
       type: "string",
       description:
-        "カテゴリ、本人のメモ、撮影日時、位置情報、カレンダー予定から分かる撮影時の背景や状況を説明する。撮影日時がある場合は日付または時間帯に触れ、位置情報がある場合はその存在に触れ、予定がある場合は写真との関係に触れる"
+        "カテゴリ、本人のメモ、撮影日時、撮影場所、カレンダー予定から分かる撮影時の背景や状況を説明する。日本時間をそのまま解釈する"
     },
 
     valueReason: {
@@ -115,7 +118,7 @@ const analysisSchema = {
     reason: {
       type: "string",
       description:
-        "emotion、experience、people、learning、specialの5項目について、それぞれ何点にしたかと具体的な採点根拠を説明する"
+        "emotion、experience、people、learning、specialの5項目について、それぞれの点数と具体的な採点根拠を説明する"
     }
   },
 
@@ -162,7 +165,6 @@ app.get("/analyze-test", async (req, res) => {
       contents: [
         {
           role: "user",
-
           parts: [
             {
               text:
@@ -254,12 +256,12 @@ app.post(
         });
       }
 
-      // Geminiへ送信する写真は最大3枚
+      // Geminiへ送る写真は最大3枚
       const imageParts = files
         .slice(0, MAX_AI_PHOTO_COUNT)
         .map(createImagePart);
 
-      // AIが理解しやすい文章形式へ変換
+      // 写真情報をAIが読みやすい簡潔な形式へ変換
       const formattedPhotoContexts =
         formatPhotoContexts(
           photoContexts
@@ -272,6 +274,22 @@ app.post(
           fileCount: files.length,
           formattedPhotoContexts
         });
+
+      console.log(
+        "===================================="
+      );
+
+      console.log(
+        "Geminiへ送る写真文脈:"
+      );
+
+      console.log(
+        formattedPhotoContexts
+      );
+
+      console.log(
+        "===================================="
+      );
 
       console.log(
         "Geminiへ送信中..."
@@ -313,7 +331,9 @@ app.post(
         "Geminiから返答を受信しました"
       );
 
-      console.log(responseText);
+      console.log(
+        responseText
+      );
 
       if (!responseText.trim()) {
         throw new Error(
@@ -332,7 +352,7 @@ app.post(
       let descriptions =
         normalizeDescriptions(result);
 
-      // 同じ文章が含まれていた場合は再生成
+      // 同じ文章が複数項目に使われた場合は再生成
       const duplicateFields =
         findDuplicateFields(
           descriptions
@@ -358,7 +378,7 @@ app.post(
         calculateScore(scores);
 
       /*
-        現在は写真全体を1回で評価しているため、
+        現在は選択された写真全体を1回で評価しているため、
         写真枚数は掛けません。
       */
       const totalScore =
@@ -425,7 +445,9 @@ app.post(
         "========== ERROR =========="
       );
 
-      console.error(error);
+      console.error(
+        error
+      );
 
       console.error(
         "==========================="
@@ -489,7 +511,7 @@ function createImagePart(file) {
 }
 
 // =====================================
-// 写真情報を読みやすい文章へ変換
+// 写真情報を簡潔な文章へ変換
 // =====================================
 
 function formatPhotoContexts(
@@ -499,50 +521,42 @@ function formatPhotoContexts(
     !Array.isArray(photoContexts) ||
     photoContexts.length === 0
   ) {
-    return "写真の付随情報はありません。";
+    return "写真情報はありません。";
   }
 
   return photoContexts
     .map((photo, index) => {
-      const takenDate =
-        formatDateValue(
-          photo.takenDate
-        );
-
-      const latitude =
-        normalizeNullableValue(
-          photo.latitude
-        );
-
-      const longitude =
-        normalizeNullableValue(
-          photo.longitude
-        );
-
-      const locationText =
-        createLocationText(
-          latitude,
-          longitude
-        );
-
-      const eventText =
-        createCalendarEventText(
-          photo.relatedEvent
-        );
-
       const fileName =
         normalizeNullableValue(
           photo.fileName
         );
 
-      const dateSource =
-        normalizeNullableValue(
-          photo.dateSource
-        );
+      /*
+        Monaca側で作成した日本時間の文字列を最優先。
+        存在しない場合のみ、元の日時をサーバー側でJSTへ変換。
+      */
+      const takenDate =
+        hasText(photo.takenDateJST)
+          ? String(photo.takenDateJST).trim()
+          : formatDateValueJST(
+              photo.takenDate
+            );
 
-      const gpsSource =
-        normalizeNullableValue(
-          photo.gpsSource
+      /*
+        locationNameがあれば「○○付近」を使用。
+        ない場合は、緯度経度が存在することだけを伝える。
+      */
+      const location =
+        hasText(photo.locationName)
+          ? String(photo.locationName).trim()
+          : createLocationText(
+              photo.latitude,
+              photo.longitude
+            );
+
+      const calendar =
+        createCalendarEventText(
+          photo.relatedEvent
         );
 
       return `
@@ -554,32 +568,27 @@ ${fileName}
 撮影日時：
 ${takenDate}
 
-撮影日時の取得元：
-${dateSource}
+撮影場所：
+${location}
 
-位置情報：
-${locationText}
-
-位置情報の取得元：
-${gpsSource}
-
-関連するカレンダー予定：
-${eventText}
+関連予定：
+${calendar}
 `.trim();
     })
     .join("\n\n");
 }
 
 // =====================================
-// 撮影日時を整形
+// 撮影日時を日本時間へ変換
 // =====================================
 
-function formatDateValue(value) {
+function formatDateValueJST(value) {
   if (!value) {
     return "取得できません";
   }
 
-  const date = new Date(value);
+  const date =
+    new Date(value);
 
   if (
     Number.isNaN(
@@ -589,38 +598,119 @@ function formatDateValue(value) {
     return String(value);
   }
 
-  const year =
-    date.getFullYear();
+  const dateText =
+    new Intl.DateTimeFormat(
+      "ja-JP",
+      {
+        timeZone:
+          APP_TIME_ZONE,
 
-  const month =
-    String(
-      date.getMonth() + 1
-    ).padStart(2, "0");
+        year:
+          "numeric",
 
-  const day =
-    String(
-      date.getDate()
-    ).padStart(2, "0");
+        month:
+          "long",
 
-  const hours =
-    String(
-      date.getHours()
-    ).padStart(2, "0");
+        day:
+          "numeric",
 
-  const minutes =
-    String(
-      date.getMinutes()
-    ).padStart(2, "0");
+        weekday:
+          "short",
 
-  const seconds =
-    String(
-      date.getSeconds()
-    ).padStart(2, "0");
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hour12:
+          false
+      }
+    ).format(date);
+
+  const timePeriod =
+    getJapaneseTimePeriod(
+      date
+    );
 
   return (
-    `${year}年${month}月${day}日 ` +
-    `${hours}時${minutes}分${seconds}秒`
+    `${dateText}（日本時間・${timePeriod}）`
   );
+}
+
+// =====================================
+// 時間帯を判定
+// =====================================
+
+function getJapaneseTimePeriod(
+  dateValue
+) {
+  const date =
+    new Date(dateValue);
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return "時間帯不明";
+  }
+
+  const hourText =
+    new Intl.DateTimeFormat(
+      "ja-JP",
+      {
+        timeZone:
+          APP_TIME_ZONE,
+
+        hour:
+          "2-digit",
+
+        hour12:
+          false
+      }
+    ).format(date);
+
+  const hour =
+    Number(
+      hourText.replace(
+        /\D/g,
+        ""
+      )
+    );
+
+  if (
+    hour >= 5 &&
+    hour < 10
+  ) {
+    return "朝";
+  }
+
+  if (
+    hour >= 10 &&
+    hour < 15
+  ) {
+    return "昼";
+  }
+
+  if (
+    hour >= 15 &&
+    hour < 18
+  ) {
+    return "午後";
+  }
+
+  if (
+    hour >= 18 &&
+    hour < 21
+  ) {
+    return "夕方";
+  }
+
+  return "夜";
 }
 
 // =====================================
@@ -632,27 +722,29 @@ function createLocationText(
   longitude
 ) {
   const hasLatitude =
-    latitude !== "取得できません";
+    latitude !== null &&
+    latitude !== undefined &&
+    latitude !== "";
 
   const hasLongitude =
-    longitude !== "取得できません";
+    longitude !== null &&
+    longitude !== undefined &&
+    longitude !== "";
 
   if (
     !hasLatitude ||
     !hasLongitude
   ) {
-    return "位置情報を取得できません";
+    return "取得できません";
   }
 
   return (
-    `緯度 ${latitude}、` +
-    `経度 ${longitude} が記録されています。` +
-    "地名は断定せず、位置情報が存在することだけを利用してください。"
+    "位置情報が記録されています。"
   );
 }
 
 // =====================================
-// カレンダー予定を文章化
+// カレンダー予定を簡潔にする
 // =====================================
 
 function createCalendarEventText(
@@ -662,12 +754,17 @@ function createCalendarEventText(
     !relatedEvent ||
     typeof relatedEvent !== "object"
   ) {
-    return "関連する予定はありません";
+    return "関連予定なし";
   }
 
   const title =
-    relatedEvent.summary ||
-    "タイトルなし";
+    hasText(
+      relatedEvent.summary
+    )
+      ? String(
+          relatedEvent.summary
+        ).trim()
+      : "タイトルなし";
 
   const start =
     relatedEvent.start?.dateTime ||
@@ -679,21 +776,69 @@ function createCalendarEventText(
     relatedEvent.end?.date ||
     null;
 
-  const startText =
-    start
-      ? formatDateValue(start)
-      : "開始時刻不明";
+  if (
+    relatedEvent.start?.date &&
+    relatedEvent.end?.date
+  ) {
+    return (
+      `${title}（終日予定）`
+    );
+  }
 
-  const endText =
+  if (
+    start &&
     end
-      ? formatDateValue(end)
-      : "終了時刻不明";
+  ) {
+    const startText =
+      formatTimeJST(start);
 
-  return (
-    `予定名：${title}\n` +
-    `開始：${startText}\n` +
-    `終了：${endText}`
-  );
+    const endText =
+      formatTimeJST(end);
+
+    return (
+      `${title}（${startText}～${endText}・日本時間）`
+    );
+  }
+
+  return title;
+}
+
+// =====================================
+// カレンダー時刻を日本時間へ変換
+// =====================================
+
+function formatTimeJST(value) {
+  if (!value) {
+    return "時刻不明";
+  }
+
+  const date =
+    new Date(value);
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat(
+    "ja-JP",
+    {
+      timeZone:
+        APP_TIME_ZONE,
+
+      hour:
+        "2-digit",
+
+      minute:
+        "2-digit",
+
+      hour12:
+        false
+    }
+  ).format(date);
 }
 
 // =====================================
@@ -709,7 +854,7 @@ function createAnalysisPrompt({
   return `
 あなたは「時間の価値の可視化」アプリで使用する分析AIです。
 
-写真と付随情報を分析し、以下の4種類の文章を、それぞれ異なる観点から作成してください。
+写真と付随情報を分析し、以下の4種類の文章を、それぞれ別の役割として作成してください。
 
 =====================================
 【1：summary】
@@ -725,15 +870,13 @@ function createAnalysisPrompt({
 ・表情
 ・雰囲気
 
-使用してはいけない情報：
+使用禁止：
 ・本人のメモ
 ・撮影日時
-・位置情報
+・撮影場所
 ・カレンダー予定
 
-注意：
-・写真に写っていない出来事を断定しないでください。
-・summaryは写真の視覚的な内容だけを書いてください。
+写真に写っていない内容を断定しないでください。
 
 =====================================
 【2：contextMeaning】
@@ -745,24 +888,19 @@ function createAnalysisPrompt({
 ・カテゴリ
 ・本人のメモ
 ・撮影日時
-・位置情報
+・撮影場所
 ・カレンダー予定
 
 必ず行うこと：
-・撮影日時が存在する場合は、日付または時間帯に必ず触れてください。
-・位置情報が存在する場合は、位置情報が記録されていることに必ず触れてください。
-・カレンダー予定が存在する場合は、その予定と写真の関係を説明してください。
-・本人のメモが存在する場合は、その出来事が本人にとってどのような状況だったか説明してください。
-・利用できる付随情報を無視せず、文章へ反映してください。
+・撮影日時がある場合は、日付または時間帯に触れてください。
+・撮影場所がある場合は、その場所と出来事の関係に触れてください。
+・関連予定がある場合は、その予定と写真の関係に触れてください。
+・本人のメモがある場合は、その出来事の背景として反映してください。
 
 禁止：
 ・summaryと同じ写真説明を繰り返すこと
-・緯度や経度だけから地名や施設名を断定すること
-・存在しない予定や位置情報を作ること
-・日時や位置情報があるのに、それらへ一切触れないこと
-
-contextMeaningは、
-日時・場所・予定・メモから分かる撮影時の背景です。
+・存在しない場所や予定を作ること
+・日本時間をUTCとして読み直すこと
 
 =====================================
 【3：valueReason】
@@ -781,11 +919,8 @@ contextMeaningは、
 
 禁止：
 ・写真の見た目だけを説明すること
-・撮影日時や予定を並べるだけにすること
-・点数の説明をすること
-
-valueReasonは、
-この思い出を将来残す価値の説明です。
+・日時や予定を並べるだけにすること
+・点数だけを説明すること
 
 =====================================
 【4：reason】
@@ -800,13 +935,7 @@ valueReasonは、
 ・learning
 ・special
 
-禁止：
-・写真の説明だけを書くこと
-・思い出を残す価値だけを書くこと
-・summary、contextMeaning、valueReasonをまとめ直すこと
-
-reasonは、
-5項目の点数評価の理由です。
+summary、contextMeaning、valueReasonをまとめ直す文章にはしないでください。
 
 =====================================
 【入力情報】
@@ -824,6 +953,18 @@ ${fileCount}枚
 写真の付随情報：
 
 ${formattedPhotoContexts}
+
+=====================================
+【日時についての重要事項】
+=====================================
+
+・撮影日時と予定日時は、すべて日本時間です。
+・UTCへ変換し直さないでください。
+・表示されている時間帯をそのまま使用してください。
+・15時台は午後です。
+・18時台は夕方です。
+・21時以降は夜です。
+・日本時間と明記された日時を最優先で解釈してください。
 
 =====================================
 【評価基準】
@@ -855,11 +996,6 @@ special：
 ・単なる言い換えも避けてください。
 ・各文章は1文から3文で書いてください。
 ・不明な情報を事実として断定しないでください。
-・撮影日時がある場合は、contextMeaningで必ず触れてください。
-・位置情報がある場合は、contextMeaningで必ず触れてください。
-・カレンダー予定がある場合は、contextMeaningで必ず写真との関係に触れてください。
-・位置情報がない場合は、場所を推測しないでください。
-・予定がない場合は、予定を作らないでください。
 ・空文字は禁止です。
 ・JSON以外は出力しないでください。
 `;
@@ -896,7 +1032,9 @@ function parseGeminiResponse(
 // 点数補正
 // =====================================
 
-function normalizeScores(result) {
+function normalizeScores(
+  result
+) {
   return {
     emotion:
       normalizeScore(
@@ -963,7 +1101,9 @@ function normalizeDescriptions(
 // 合計点計算
 // =====================================
 
-function calculateScore(scores) {
+function calculateScore(
+  scores
+) {
   return (
     scores.emotion +
     scores.experience +
@@ -993,10 +1133,7 @@ summary：
 写真に視覚的に写っている内容だけを書く。
 
 contextMeaning：
-カテゴリ、メモ、撮影日時、位置情報、予定から分かる背景だけを書く。
-日時がある場合は日付または時間帯に触れてください。
-位置情報がある場合は位置情報が記録されていることに触れてください。
-予定がある場合は写真との関係に触れてください。
+カテゴリ、メモ、日本時間の撮影日時、撮影場所、関連予定から分かる背景だけを書く。
 
 valueReason：
 この時間を将来残す価値だけを書く。
@@ -1028,6 +1165,10 @@ ${memo || "メモなし"}
 
 写真情報：
 ${formattedPhotoContexts}
+
+注意：
+日時はすべて日本時間です。
+UTCへ変換し直さないでください。
 
 点数：
 ${JSON.stringify(scores, null, 2)}
@@ -1071,7 +1212,7 @@ JSON以外は出力しないでください。
             contextMeaning: {
               type: "string",
               description:
-                "日時、位置情報、予定、メモから分かる背景を書く"
+                "日時、場所、予定、メモから分かる背景を書く"
             },
 
             valueReason: {
@@ -1275,8 +1416,13 @@ function areTextsSimilar(
 function normalizeForComparison(
   text
 ) {
-  return String(text || "")
-    .replace(/\s+/g, "")
+  return String(
+    text || ""
+  )
+    .replace(
+      /\s+/g,
+      ""
+    )
     .replace(
       /[。、,.!?！？「」『』（）()]/g,
       ""
@@ -1288,10 +1434,20 @@ function normalizeForComparison(
 // JSON文字列整形
 // =====================================
 
-function cleanJsonText(text) {
-  return String(text || "")
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
+function cleanJsonText(
+  text
+) {
+  return String(
+    text || ""
+  )
+    .replace(
+      /```json/gi,
+      ""
+    )
+    .replace(
+      /```/g,
+      ""
+    )
     .trim();
 }
 
@@ -1299,7 +1455,9 @@ function cleanJsonText(text) {
 // 点数を0～5へ補正
 // =====================================
 
-function normalizeScore(value) {
+function normalizeScore(
+  value
+) {
   const number =
     Number(value);
 
@@ -1363,6 +1521,19 @@ function normalizeNullableValue(
 }
 
 // =====================================
+// 文字列があるか確認
+// =====================================
+
+function hasText(
+  value
+) {
+  return (
+    typeof value === "string" &&
+    value.trim() !== ""
+  );
+}
+
+// =====================================
 // リクエストログ
 // =====================================
 
@@ -1418,26 +1589,29 @@ function logRequestInformation({
 // サーバー起動
 // =====================================
 
-app.listen(PORT, () => {
-  console.log(
-    "================================"
-  );
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      "================================"
+    );
 
-  console.log(
-    "Server running!"
-  );
+    console.log(
+      "Server running!"
+    );
 
-  console.log(
-    "Version:",
-    SERVER_VERSION
-  );
+    console.log(
+      "Version:",
+      SERVER_VERSION
+    );
 
-  console.log(
-    "Port:",
-    PORT
-  );
+    console.log(
+      "Port:",
+      PORT
+    );
 
-  console.log(
-    "================================"
-  );
-});
+    console.log(
+      "================================"
+    );
+  }
+);
