@@ -12,11 +12,9 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "context-time-location-jst-v9";
-
+const SERVER_VERSION = "memory-value-25-jst-v10";
 const PORT = process.env.PORT || 3000;
 
-// 日時は必ず日本時間で扱う
 const APP_TIME_ZONE = "Asia/Tokyo";
 
 const MAX_PHOTO_COUNT = 10;
@@ -57,80 +55,87 @@ const analysisSchema = {
   type: "object",
 
   properties: {
-    emotion: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "本人の感情や印象の強さを0から5までの整数で評価する"
-    },
-
-    experience: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "経験の新しさ、挑戦、非日常性を0から5までの整数で評価する"
-    },
-
-    people: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "家族、友人、仲間など、人との関わりを0から5までの整数で評価する"
-    },
-
-    learning: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "学び、気付き、成長につながる度合いを0から5までの整数で評価する"
-    },
-
-    special: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "本人にとっての記念性、希少性、特別性を0から5までの整数で評価する"
-    },
-
-    summary: {
+    memoryTitle: {
       type: "string",
       description:
-        "写真だけから視覚的に確認できる人物、物、場所、行動、表情、雰囲気を説明する。メモ、日時、位置情報、カレンダー予定は使わない"
+        "複数の写真と付随情報から判断した、1つの思い出を表す短いタイトル"
+    },
+
+    memorySummary: {
+      type: "string",
+      description:
+        "選択された写真全体が表す1つの思い出の概要。写真に写っている内容を中心に説明する"
     },
 
     contextMeaning: {
       type: "string",
       description:
-        "カテゴリ、本人のメモ、撮影日時、撮影場所、カレンダー予定から分かる撮影時の背景や状況を説明する。日本時間をそのまま解釈する"
+        "カテゴリ、メモ、撮影日時、撮影場所、カレンダー予定から分かる思い出の背景や意味"
     },
 
     valueReason: {
       type: "string",
       description:
-        "この時間が本人にとって、なぜ将来残す価値のある時間なのかを説明する"
+        "この思い出が本人にとって、なぜ将来残す価値があるのかを説明する"
+    },
+
+    emotion: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "この思い出に伴う感情や印象の強さ"
+    },
+
+    meaning: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "この思い出が持つ意味、学び、気付き、成長"
+    },
+
+    relationship: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "家族、友人、仲間などとのつながり"
+    },
+
+    future: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "この思い出が将来の行動、考え方、成長、人間関係へ与える影響"
+    },
+
+    rarity: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "記念性、希少性、特別性、記憶として残る濃さ"
     },
 
     reason: {
       type: "string",
       description:
-        "emotion、experience、people、learning、specialの5項目について、それぞれの点数と具体的な採点根拠を説明する"
+        "emotion、meaning、relationship、future、rarityの各点数と採点根拠"
     }
   },
 
   required: [
-    "emotion",
-    "experience",
-    "people",
-    "learning",
-    "special",
-    "summary",
+    "memoryTitle",
+    "memorySummary",
     "contextMeaning",
     "valueReason",
+    "emotion",
+    "meaning",
+    "relationship",
+    "future",
+    "rarity",
     "reason"
   ]
 };
@@ -165,6 +170,7 @@ app.get("/analyze-test", async (req, res) => {
       contents: [
         {
           role: "user",
+
           parts: [
             {
               text:
@@ -186,12 +192,15 @@ app.get("/analyze-test", async (req, res) => {
             }
           },
 
-          required: ["status"]
+          required: [
+            "status"
+          ]
         }
       }
     });
 
-    const responseText = response.text || "{}";
+    const responseText =
+      response.text || "{}";
 
     const result = JSON.parse(
       cleanJsonText(responseText)
@@ -218,7 +227,7 @@ app.get("/analyze-test", async (req, res) => {
 });
 
 // =====================================
-// AI評価
+// 思い出AI評価
 // =====================================
 
 app.post(
@@ -234,7 +243,8 @@ app.post(
         req.body.category || ""
       ).trim();
 
-      const files = req.files || [];
+      const files =
+        req.files || [];
 
       const photoContexts =
         parsePhotoContexts(
@@ -256,12 +266,15 @@ app.post(
         });
       }
 
-      // Geminiへ送る写真は最大3枚
+      /*
+        Geminiへ送る画像は最大3枚。
+        ただし評価対象は写真1枚ずつではなく、
+        写真全体から判断される1つの思い出。
+      */
       const imageParts = files
         .slice(0, MAX_AI_PHOTO_COUNT)
         .map(createImagePart);
 
-      // 写真情報をAIが読みやすい簡潔な形式へ変換
       const formattedPhotoContexts =
         formatPhotoContexts(
           photoContexts
@@ -352,7 +365,10 @@ app.post(
       let descriptions =
         normalizeDescriptions(result);
 
-      // 同じ文章が複数項目に使われた場合は再生成
+      /*
+        各説明文が同じ文章になった場合は、
+        文章部分だけ再生成する。
+      */
       const duplicateFields =
         findDuplicateFields(
           descriptions
@@ -374,15 +390,15 @@ app.post(
           });
       }
 
-      const onePhotoScore =
-        calculateScore(scores);
-
       /*
-        現在は選択された写真全体を1回で評価しているため、
-        写真枚数は掛けません。
+        5項目を各5点満点で評価。
+        合計は最大25点。
+
+        写真枚数は掛けない。
+        何枚選択しても1つの思い出として1回だけ評価する。
       */
       const totalScore =
-        onePhotoScore;
+        calculateScore(scores);
 
       const responseData = {
         status: "ok",
@@ -390,23 +406,11 @@ app.post(
         serverVersion:
           SERVER_VERSION,
 
-        emotion:
-          scores.emotion,
+        memoryTitle:
+          descriptions.memoryTitle,
 
-        experience:
-          scores.experience,
-
-        people:
-          scores.people,
-
-        learning:
-          scores.learning,
-
-        special:
-          scores.special,
-
-        summary:
-          descriptions.summary,
+        memorySummary:
+          descriptions.memorySummary,
 
         contextMeaning:
           descriptions.contextMeaning,
@@ -414,14 +418,34 @@ app.post(
         valueReason:
           descriptions.valueReason,
 
+        emotion:
+          scores.emotion,
+
+        meaning:
+          scores.meaning,
+
+        relationship:
+          scores.relationship,
+
+        future:
+          scores.future,
+
+        rarity:
+          scores.rarity,
+
+        totalScore,
+
         reason:
           descriptions.reason,
 
-        onePhotoScore,
-        totalScore,
-
         photoCount:
-          files.length
+          files.length,
+
+        evaluationUnit:
+          "memory",
+
+        maxScore:
+          25
       };
 
       console.log(
@@ -456,7 +480,7 @@ app.post(
       return res.status(500).json({
         status: "error",
         serverVersion: SERVER_VERSION,
-        error: "AI評価に失敗しました",
+        error: "思い出のAI評価に失敗しました",
         detail: error.message
       });
     }
@@ -464,7 +488,7 @@ app.post(
 );
 
 // =====================================
-// 写真情報の解析
+// 写真情報JSONの解析
 // =====================================
 
 function parsePhotoContexts(
@@ -511,7 +535,7 @@ function createImagePart(file) {
 }
 
 // =====================================
-// 写真情報を簡潔な文章へ変換
+// 写真情報を文章へ変換
 // =====================================
 
 function formatPhotoContexts(
@@ -532,23 +556,25 @@ function formatPhotoContexts(
         );
 
       /*
-        Monaca側で作成した日本時間の文字列を最優先。
-        存在しない場合のみ、元の日時をサーバー側でJSTへ変換。
+        Monaca側で作成した日本時間表記を優先する。
       */
       const takenDate =
         hasText(photo.takenDateJST)
-          ? String(photo.takenDateJST).trim()
+          ? String(
+              photo.takenDateJST
+            ).trim()
           : formatDateValueJST(
               photo.takenDate
             );
 
       /*
-        locationNameがあれば「○○付近」を使用。
-        ない場合は、緯度経度が存在することだけを伝える。
+        位置名が取得できている場合は位置名を使用する。
       */
       const location =
         hasText(photo.locationName)
-          ? String(photo.locationName).trim()
+          ? String(
+              photo.locationName
+            ).trim()
           : createLocationText(
               photo.latitude,
               photo.longitude
@@ -674,13 +700,12 @@ function getJapaneseTimePeriod(
       }
     ).format(date);
 
-  const hour =
-    Number(
-      hourText.replace(
-        /\D/g,
-        ""
-      )
-    );
+  const hour = Number(
+    hourText.replace(
+      /\D/g,
+      ""
+    )
+  );
 
   if (
     hour >= 5 &&
@@ -744,7 +769,7 @@ function createLocationText(
 }
 
 // =====================================
-// カレンダー予定を簡潔にする
+// カレンダー予定を文章化
 // =====================================
 
 function createCalendarEventText(
@@ -842,7 +867,7 @@ function formatTimeJST(value) {
 }
 
 // =====================================
-// プロンプト生成
+// AIプロンプト生成
 // =====================================
 
 function createAnalysisPrompt({
@@ -854,15 +879,40 @@ function createAnalysisPrompt({
   return `
 あなたは「時間の価値の可視化」アプリで使用する分析AIです。
 
-写真と付随情報を分析し、以下の4種類の文章を、それぞれ別の役割として作成してください。
+選択された写真は、写真1枚ごとに採点するためのものではありません。
+
+選択された写真全体と付随情報から、
+写真が表している「1つの思い出」を推定してください。
+
+その1つの思い出を、
+5項目・合計25点満点で1回だけ評価してください。
+
+写真枚数を点数に掛けてはいけません。
 
 =====================================
-【1：summary】
+【1：memoryTitle】
 =====================================
 
-写真に直接写っている内容だけを説明してください。
+写真全体と付随情報から推定される1つの思い出に、
+短く分かりやすいタイトルを付けてください。
 
-対象：
+例：
+・友人との京都旅行
+・家族で過ごした誕生日
+・大学生活最後の文化祭
+・アルバイト仲間との食事
+
+分からない情報を事実として断定しないでください。
+
+=====================================
+【2：memorySummary】
+=====================================
+
+選択された写真全体が表している、
+1つの思い出の概要を説明してください。
+
+写真に写っている次の内容を中心にしてください。
+
 ・人物
 ・物
 ・場所
@@ -870,72 +920,78 @@ function createAnalysisPrompt({
 ・表情
 ・雰囲気
 
-使用禁止：
-・本人のメモ
-・撮影日時
-・撮影場所
-・カレンダー予定
+写真ごとの説明を別々に並べるのではなく、
+全体を1つの出来事としてまとめてください。
 
+メモ、日時、場所、予定だけを根拠に、
 写真に写っていない内容を断定しないでください。
 
 =====================================
-【2：contextMeaning】
+【3：contextMeaning】
 =====================================
 
-写真の付随情報から、撮影時の背景や状況を説明してください。
+写真の付随情報を使って、
+この思い出の背景や本人にとっての意味を説明してください。
 
 使用する情報：
+
 ・カテゴリ
 ・本人のメモ
 ・撮影日時
 ・撮影場所
 ・カレンダー予定
 
-必ず行うこと：
-・撮影日時がある場合は、日付または時間帯に触れてください。
-・撮影場所がある場合は、その場所と出来事の関係に触れてください。
-・関連予定がある場合は、その予定と写真の関係に触れてください。
-・本人のメモがある場合は、その出来事の背景として反映してください。
+撮影日時がある場合は、
+日付または時間帯に触れてください。
 
-禁止：
-・summaryと同じ写真説明を繰り返すこと
-・存在しない場所や予定を作ること
-・日本時間をUTCとして読み直すこと
+撮影場所がある場合は、
+場所と出来事の関係に触れてください。
+
+関連予定がある場合は、
+予定と写真の関係に触れてください。
+
+本人のメモは、
+思い出の背景として重視してください。
+
+存在しない予定や場所を作ってはいけません。
+
+日本時間をUTCとして読み直してはいけません。
 
 =====================================
-【3：valueReason】
+【4：valueReason】
 =====================================
 
-この時間が本人にとって、
+この思い出が本人にとって、
 なぜ将来残す価値のある時間なのかを説明してください。
 
-考慮する観点：
+次の観点を考慮してください。
+
 ・感情
-・経験
-・人との関係
-・学び
-・特別性
-・将来振り返る意味
+・意味や学び
+・人とのつながり
+・将来への影響
+・希少性
+・記憶として残る濃さ
 
-禁止：
-・写真の見た目だけを説明すること
-・日時や予定を並べるだけにすること
-・点数だけを説明すること
+写真の見た目を説明するだけにしないでください。
+
+日時、場所、予定を並べるだけにしないでください。
 
 =====================================
-【4：reason】
+【5：reason】
 =====================================
 
-以下の5項目について、
+次の5項目について、
 何点にしたかと具体的な採点根拠を説明してください。
 
 ・emotion
-・experience
-・people
-・learning
-・special
+・meaning
+・relationship
+・future
+・rarity
 
-summary、contextMeaning、valueReasonをまとめ直す文章にはしないでください。
+各項目について、
+「〇点。理由は～」のように説明してください。
 
 =====================================
 【入力情報】
@@ -947,7 +1003,7 @@ ${category || "未設定"}
 本人のメモ：
 ${memo || "メモなし"}
 
-選択された写真枚数：
+思い出の判断に使用する写真枚数：
 ${fileCount}枚
 
 写真の付随情報：
@@ -960,42 +1016,171 @@ ${formattedPhotoContexts}
 
 ・撮影日時と予定日時は、すべて日本時間です。
 ・UTCへ変換し直さないでください。
-・表示されている時間帯をそのまま使用してください。
+・表示されている日時をそのまま解釈してください。
 ・15時台は午後です。
 ・18時台は夕方です。
 ・21時以降は夜です。
-・日本時間と明記された日時を最優先で解釈してください。
+・日本時間と書かれた日時を最優先してください。
 
 =====================================
-【評価基準】
+【25点満点の評価基準】
 =====================================
 
 emotion：
-本人の感情や印象の強さ
+この思い出に伴う感情や印象の強さ
 
-experience：
-経験の新しさ、挑戦、非日常性
+0点：
+感情を判断できない
 
-people：
-家族、友人、仲間など、人との関わり
+1点：
+弱い感情である
 
-learning：
-学び、気付き、成長
+2点：
+多少の感情がある
 
-special：
-記念性、希少性、特別性
+3点：
+明確な感情がある
 
-各項目を0から5までの整数で評価してください。
+4点：
+強い感情を伴う
+
+5点：
+非常に強く記憶に残る感情を伴う
+
+-------------------------------------
+
+meaning：
+意味、学び、気付き、成長
+
+0点：
+意味や学びを判断できない
+
+1点：
+意味や学びが小さい
+
+2点：
+多少の意味や学びがある
+
+3点：
+明確な意味や学びがある
+
+4点：
+大きな成長や気付きにつながる
+
+5点：
+人生観や価値観に関わる大きな意味がある
+
+-------------------------------------
+
+relationship：
+家族、友人、仲間などとのつながり
+
+0点：
+人との関係を判断できない
+
+1点：
+人との関わりが弱い
+
+2点：
+一定の関わりがある
+
+3点：
+交流や共有体験がある
+
+4点：
+関係を深める重要な体験である
+
+5点：
+非常に強い絆や重要な関係性を表す
+
+-------------------------------------
+
+future：
+将来の考え方、行動、成長、人間関係への影響
+
+0点：
+将来への影響を判断できない
+
+1点：
+将来への影響が小さい
+
+2点：
+多少の影響がある
+
+3点：
+今後につながる経験である
+
+4点：
+将来の選択や成長に大きく影響する
+
+5点：
+人生の方向性を変えるほどの影響がある
+
+-------------------------------------
+
+rarity：
+記念性、希少性、特別性、記憶として残る濃さ
+
+0点：
+特別性を判断できない
+
+1点：
+日常的で記憶性が低い
+
+2点：
+やや印象に残る
+
+3点：
+特別な要素がある
+
+4点：
+記念性や希少性が高い
+
+5点：
+二度と同じ形では経験できない、
+非常に特別な思い出である
+
+=====================================
+【合計点】
+=====================================
+
+emotion：
+0～5点
+
+meaning：
+0～5点
+
+relationship：
+0～5点
+
+future：
+0～5点
+
+rarity：
+0～5点
+
+5項目の合計を、
+1つの思い出の価値とします。
+
+合計は0点から25点です。
 
 =====================================
 【重要な制約】
 =====================================
 
-・summary、contextMeaning、valueReason、reasonは必ず異なる文章にしてください。
-・同じ文章を複数項目へ書かないでください。
-・単なる言い換えも避けてください。
-・各文章は1文から3文で書いてください。
+・評価対象は写真ではなく、写真から推定した1つの思い出です。
+・写真1枚ごとに点数を付けてはいけません。
+・写真枚数を点数に掛けてはいけません。
+・複数の写真でも合計は最大25点です。
+・memoryTitleは思い出の短い名前にしてください。
+・memorySummaryは写真全体から分かる思い出の概要にしてください。
+・contextMeaningは付随情報から分かる背景や意味にしてください。
+・valueReasonは将来残す価値を説明してください。
+・reasonは点数と採点根拠を説明してください。
+・各文章を同じ内容にしないでください。
+・同じ文章を複数項目に書かないでください。
 ・不明な情報を事実として断定しないでください。
+・各文章は1文から3文程度にしてください。
 ・空文字は禁止です。
 ・JSON以外は出力しないでください。
 `;
@@ -1041,24 +1226,24 @@ function normalizeScores(
         result.emotion
       ),
 
-    experience:
+    meaning:
       normalizeScore(
-        result.experience
+        result.meaning
       ),
 
-    people:
+    relationship:
       normalizeScore(
-        result.people
+        result.relationship
       ),
 
-    learning:
+    future:
       normalizeScore(
-        result.learning
+        result.future
       ),
 
-    special:
+    rarity:
       normalizeScore(
-        result.special
+        result.rarity
       )
   };
 }
@@ -1071,22 +1256,28 @@ function normalizeDescriptions(
   result
 ) {
   return {
-    summary:
+    memoryTitle:
       normalizeText(
-        result.summary,
-        "写真そのものの意味を取得できませんでした。"
+        result.memoryTitle,
+        "名称を付けられない思い出"
+      ),
+
+    memorySummary:
+      normalizeText(
+        result.memorySummary,
+        "写真全体から思い出の概要を取得できませんでした。"
       ),
 
     contextMeaning:
       normalizeText(
         result.contextMeaning,
-        "日時やメモなどから文脈的な意味を取得できませんでした。"
+        "日時やメモなどから思い出の背景を取得できませんでした。"
       ),
 
     valueReason:
       normalizeText(
         result.valueReason,
-        "この時間が持つ価値の理由を取得できませんでした。"
+        "この思い出が持つ時間価値の理由を取得できませんでした。"
       ),
 
     reason:
@@ -1098,7 +1289,7 @@ function normalizeDescriptions(
 }
 
 // =====================================
-// 合計点計算
+// 25点満点の合計点計算
 // =====================================
 
 function calculateScore(
@@ -1106,15 +1297,15 @@ function calculateScore(
 ) {
   return (
     scores.emotion +
-    scores.experience +
-    scores.people +
-    scores.learning +
-    scores.special
+    scores.meaning +
+    scores.relationship +
+    scores.future +
+    scores.rarity
   );
 }
 
 // =====================================
-// 重複時の再生成
+// 説明文が重複した場合の再生成
 // =====================================
 
 async function regenerateDescriptions({
@@ -1125,26 +1316,39 @@ async function regenerateDescriptions({
   scores
 }) {
   const prompt = `
-以下の4文章には、内容の重複または役割の混在があります。
+以下の5文章には、
+内容の重複または役割の混在があります。
+
+評価対象は写真そのものではなく、
+写真全体から推定された1つの思い出です。
 
 それぞれ異なる役割の文章として書き直してください。
 
-summary：
-写真に視覚的に写っている内容だけを書く。
+memoryTitle：
+1つの思い出を表す短いタイトルを書く。
+
+memorySummary：
+写真全体から分かる1つの思い出の概要を書く。
 
 contextMeaning：
-カテゴリ、メモ、日本時間の撮影日時、撮影場所、関連予定から分かる背景だけを書く。
+カテゴリ、メモ、日本時間の撮影日時、
+撮影場所、関連予定から分かる背景や意味を書く。
 
 valueReason：
-この時間を将来残す価値だけを書く。
+この思い出を将来残す価値を書く。
 
 reason：
 5項目の点数と採点根拠だけを書く。
 
+=====================================
 【現在の文章】
+=====================================
 
-summary：
-${descriptions.summary}
+memoryTitle：
+${descriptions.memoryTitle}
+
+memorySummary：
+${descriptions.memorySummary}
 
 contextMeaning：
 ${descriptions.contextMeaning}
@@ -1155,7 +1359,9 @@ ${descriptions.valueReason}
 reason：
 ${descriptions.reason}
 
+=====================================
 【入力情報】
+=====================================
 
 カテゴリ：
 ${category || "未設定"}
@@ -1166,15 +1372,13 @@ ${memo || "メモなし"}
 写真情報：
 ${formattedPhotoContexts}
 
-注意：
 日時はすべて日本時間です。
 UTCへ変換し直さないでください。
 
 点数：
 ${JSON.stringify(scores, null, 2)}
 
-4文章は同じ内容にせず、
-それぞれ1文から3文で書いてください。
+5文章は同じ内容にしないでください。
 
 JSON以外は出力しないでください。
 `;
@@ -1203,33 +1407,40 @@ JSON以外は出力しないでください。
           type: "object",
 
           properties: {
-            summary: {
+            memoryTitle: {
               type: "string",
               description:
-                "写真の視覚的内容だけを書く"
+                "1つの思い出を表す短いタイトル"
+            },
+
+            memorySummary: {
+              type: "string",
+              description:
+                "写真全体から分かる1つの思い出の概要"
             },
 
             contextMeaning: {
               type: "string",
               description:
-                "日時、場所、予定、メモから分かる背景を書く"
+                "日時、場所、予定、メモから分かる背景や意味"
             },
 
             valueReason: {
               type: "string",
               description:
-                "この時間を残す価値を書く"
+                "この思い出を将来残す価値"
             },
 
             reason: {
               type: "string",
               description:
-                "5項目の点数と採点根拠を書く"
+                "5項目の点数と採点根拠"
             }
           },
 
           required: [
-            "summary",
+            "memoryTitle",
+            "memorySummary",
             "contextMeaning",
             "valueReason",
             "reason"
@@ -1251,10 +1462,16 @@ JSON以外は出力しないでください。
     );
 
   return {
-    summary:
+    memoryTitle:
       normalizeText(
-        regenerated.summary,
-        descriptions.summary
+        regenerated.memoryTitle,
+        descriptions.memoryTitle
+      ),
+
+    memorySummary:
+      normalizeText(
+        regenerated.memorySummary,
+        descriptions.memorySummary
       ),
 
     contextMeaning:
@@ -1278,7 +1495,7 @@ JSON以外は出力しないでください。
 }
 
 // =====================================
-// 重複確認
+// 説明文の重複確認
 // =====================================
 
 function findDuplicateFields(
@@ -1286,8 +1503,13 @@ function findDuplicateFields(
 ) {
   const entries = [
     [
-      "summary",
-      descriptions.summary
+      "memoryTitle",
+      descriptions.memoryTitle
+    ],
+
+    [
+      "memorySummary",
+      descriptions.memorySummary
     ],
 
     [
@@ -1390,8 +1612,7 @@ function areTextsSimilar(
   let matchedCount = 0;
 
   for (
-    const character
-    of shorter
+    const character of shorter
   ) {
     if (
       longer.includes(
@@ -1521,7 +1742,7 @@ function normalizeNullableValue(
 }
 
 // =====================================
-// 文字列があるか確認
+// 文字列が存在するか確認
 // =====================================
 
 function hasText(
@@ -1534,7 +1755,7 @@ function hasText(
 }
 
 // =====================================
-// リクエストログ
+// リクエスト情報ログ
 // =====================================
 
 function logRequestInformation({
@@ -1548,7 +1769,7 @@ function logRequestInformation({
   );
 
   console.log(
-    "AIリクエストを受信しました"
+    "思い出AI評価リクエストを受信しました"
   );
 
   console.log(
@@ -1586,6 +1807,72 @@ function logRequestInformation({
 }
 
 // =====================================
+// Multerエラー処理
+// =====================================
+
+app.use(
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+    if (
+      error instanceof multer.MulterError
+    ) {
+      console.error(
+        "Multerエラー:",
+        error
+      );
+
+      if (
+        error.code === "LIMIT_FILE_SIZE"
+      ) {
+        return res.status(400).json({
+          status: "error",
+          serverVersion: SERVER_VERSION,
+          error:
+            "画像のファイルサイズが大きすぎます。1枚10MB以下にしてください。"
+        });
+      }
+
+      if (
+        error.code === "LIMIT_FILE_COUNT"
+      ) {
+        return res.status(400).json({
+          status: "error",
+          serverVersion: SERVER_VERSION,
+          error:
+            "選択できる写真は最大10枚です。"
+        });
+      }
+
+      return res.status(400).json({
+        status: "error",
+        serverVersion: SERVER_VERSION,
+        error: error.message
+      });
+    }
+
+    if (error) {
+      console.error(
+        "サーバーエラー:",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        serverVersion: SERVER_VERSION,
+        error: "サーバー内部でエラーが発生しました。",
+        detail: error.message
+      });
+    }
+
+    next();
+  }
+);
+
+// =====================================
 // サーバー起動
 // =====================================
 
@@ -1608,6 +1895,16 @@ app.listen(
     console.log(
       "Port:",
       PORT
+    );
+
+    console.log(
+      "評価単位:",
+      "1つの思い出"
+    );
+
+    console.log(
+      "最大点:",
+      "25点"
     );
 
     console.log(
