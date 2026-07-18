@@ -1,3 +1,6 @@
+修正版全文です。元の`server(7).js`内に残っていた`meaning`を、評価基準に合わせてすべて`learning`へ変更しています。
+
+````javascript
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -12,7 +15,7 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-user-priority-v11";
+const SERVER_VERSION = "memory-value-25-learning-v11";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
@@ -79,22 +82,6 @@ const analysisSchema = {
         "この思い出が本人にとって、なぜ将来残す価値があるのかを説明する"
     },
 
-    emotion: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "この思い出に伴う感情や印象の強さ"
-    },
-
-    learning: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "この思い出から得られる学び、気付き、成長"
-    },
-
     relationship: {
       type: "integer",
       minimum: 0,
@@ -103,12 +90,12 @@ const analysisSchema = {
         "家族、友人、仲間などとのつながり"
     },
 
-    future: {
+    emotion: {
       type: "integer",
       minimum: 0,
       maximum: 5,
       description:
-        "この思い出が将来の行動、考え方、成長、人間関係へ与える影響"
+        "この思い出に伴う感情や印象の強さ"
     },
 
     rarity: {
@@ -119,10 +106,26 @@ const analysisSchema = {
         "記念性、希少性、特別性、記憶として残る濃さ"
     },
 
+    learning: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "この思い出から得られる学び、気付き、成長"
+    },
+
+    future: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "この思い出が将来の行動、考え方、成長、人間関係へ与える影響"
+    },
+
     reason: {
       type: "string",
       description:
-        "emotion、relationship、learning、rarity、futureの各点数と採点根拠"
+        "relationship、emotion、rarity、learning、futureの各点数と採点根拠"
     }
   },
 
@@ -131,11 +134,11 @@ const analysisSchema = {
     "memorySummary",
     "contextMeaning",
     "valueReason",
-    "emotion",
-    "learning",
     "relationship",
-    "future",
+    "emotion",
     "rarity",
+    "learning",
+    "future",
     "reason"
   ]
 };
@@ -243,19 +246,6 @@ app.post(
         req.body.category || ""
       ).trim();
 
-      const userPriority =
-        normalizeUserPriority(
-          req.body.userPriority
-        );
-
-      const userPriorityLabel =
-        String(
-          req.body.userPriorityLabel ||
-          getUserPriorityLabel(
-            userPriority
-          )
-        ).trim();
-
       const files =
         req.files || [];
 
@@ -267,8 +257,6 @@ app.post(
       logRequestInformation({
         category,
         memo,
-        userPriority,
-        userPriorityLabel,
         files,
         photoContexts
       });
@@ -276,10 +264,8 @@ app.post(
       if (files.length === 0) {
         return res.status(400).json({
           status: "error",
-          serverVersion:
-            SERVER_VERSION,
-          error:
-            "写真がありません"
+          serverVersion: SERVER_VERSION,
+          error: "写真がありません"
         });
       }
 
@@ -288,13 +274,9 @@ app.post(
         ただし評価対象は写真1枚ずつではなく、
         写真全体から判断される1つの思い出。
       */
-      const imageParts =
-        files
-          .slice(
-            0,
-            MAX_AI_PHOTO_COUNT
-          )
-          .map(createImagePart);
+      const imageParts = files
+        .slice(0, MAX_AI_PHOTO_COUNT)
+        .map(createImagePart);
 
       const formattedPhotoContexts =
         formatPhotoContexts(
@@ -305,10 +287,7 @@ app.post(
         createAnalysisPrompt({
           category,
           memo,
-          userPriority,
-          userPriorityLabel,
-          fileCount:
-            files.length,
+          fileCount: files.length,
           formattedPhotoContexts
         });
 
@@ -334,8 +313,7 @@ app.post(
 
       const response =
         await ai.models.generateContent({
-          model:
-            "gemini-2.5-flash",
+          model: "gemini-2.5-flash",
 
           contents: [
             {
@@ -373,9 +351,7 @@ app.post(
         responseText
       );
 
-      if (
-        !responseText.trim()
-      ) {
+      if (!responseText.trim()) {
         throw new Error(
           "Geminiから空の応答が返されました"
         );
@@ -387,14 +363,10 @@ app.post(
         );
 
       const scores =
-        normalizeScores(
-          result
-        );
+        normalizeScores(result);
 
       let descriptions =
-        normalizeDescriptions(
-          result
-        );
+        normalizeDescriptions(result);
 
       /*
         各説明文が同じ文章になった場合は、
@@ -405,10 +377,7 @@ app.post(
           descriptions
         );
 
-      if (
-        duplicateFields.length >
-        0
-      ) {
+      if (duplicateFields.length > 0) {
         console.warn(
           "文章の重複を検出しました:",
           duplicateFields
@@ -418,8 +387,6 @@ app.post(
           await regenerateDescriptions({
             category,
             memo,
-            userPriority,
-            userPriorityLabel,
             formattedPhotoContexts,
             descriptions,
             scores
@@ -434,9 +401,7 @@ app.post(
         何枚選択しても1つの思い出として1回だけ評価する。
       */
       const totalScore =
-        calculateScore(
-          scores
-        );
+        calculateScore(scores);
 
       const responseData = {
         status: "ok",
@@ -456,20 +421,20 @@ app.post(
         valueReason:
           descriptions.valueReason,
 
+        relationship:
+          scores.relationship,
+
         emotion:
           scores.emotion,
+
+        rarity:
+          scores.rarity,
 
         learning:
           scores.learning,
 
-        relationship:
-          scores.relationship,
-
         future:
           scores.future,
-
-        rarity:
-          scores.rarity,
 
         totalScore,
 
@@ -483,11 +448,7 @@ app.post(
           "memory",
 
         maxScore:
-          25,
-
-        userPriority,
-
-        userPriorityLabel
+          25
       };
 
       console.log(
@@ -521,12 +482,9 @@ app.post(
 
       return res.status(500).json({
         status: "error",
-        serverVersion:
-          SERVER_VERSION,
-        error:
-          "思い出のAI評価に失敗しました",
-        detail:
-          error.message
+        serverVersion: SERVER_VERSION,
+        error: "思い出のAI評価に失敗しました",
+        detail: error.message
       });
     }
   }
@@ -540,17 +498,11 @@ function parsePhotoContexts(
   photoContextsText
 ) {
   try {
-    const parsed =
-      JSON.parse(
-        photoContextsText ||
-        "[]"
-      );
+    const parsed = JSON.parse(
+      photoContextsText || "[]"
+    );
 
-    if (
-      !Array.isArray(
-        parsed
-      )
-    ) {
+    if (!Array.isArray(parsed)) {
       return [];
     }
 
@@ -570,9 +522,7 @@ function parsePhotoContexts(
 // Gemini用画像データ作成
 // =====================================
 
-function createImagePart(
-  file
-) {
+function createImagePart(file) {
   return {
     inlineData: {
       mimeType:
@@ -595,63 +545,50 @@ function formatPhotoContexts(
   photoContexts
 ) {
   if (
-    !Array.isArray(
-      photoContexts
-    ) ||
-    photoContexts.length ===
-      0
+    !Array.isArray(photoContexts) ||
+    photoContexts.length === 0
   ) {
-    return (
-      "写真情報はありません。"
-    );
+    return "写真情報はありません。";
   }
 
   return photoContexts
-    .map(
-      (
-        photo,
-        index
-      ) => {
-        const fileName =
-          normalizeNullableValue(
-            photo.fileName
-          );
+    .map((photo, index) => {
+      const fileName =
+        normalizeNullableValue(
+          photo.fileName
+        );
 
-        /*
-          Monaca側で作成した日本時間表記を優先する。
-        */
-        const takenDate =
-          hasText(
-            photo.takenDateJST
-          )
-            ? String(
-                photo.takenDateJST
-              ).trim()
-            : formatDateValueJST(
-                photo.takenDate
-              );
+      /*
+        Monaca側で作成した日本時間表記を優先する。
+      */
+      const takenDate =
+        hasText(photo.takenDateJST)
+          ? String(
+              photo.takenDateJST
+            ).trim()
+          : formatDateValueJST(
+              photo.takenDate
+            );
 
-        /*
-          位置名が取得できている場合は位置名を使用する。
-        */
-        const location =
-          hasText(
-            photo.locationName
-          )
-            ? String(
-                photo.locationName
-              ).trim()
-            : createLocationText(
-                photo.latitude,
-                photo.longitude
-              );
+      /*
+        位置名が取得できている場合は位置名を使用する。
+      */
+      const location =
+        hasText(photo.locationName)
+          ? String(
+              photo.locationName
+            ).trim()
+          : createLocationText(
+              photo.latitude,
+              photo.longitude
+            );
 
-        const calendar =
-          createCalendarEventText(
-            photo.relatedEvent
-          );
+      const calendar =
+        createCalendarEventText(
+          photo.relatedEvent
+        );
 
-        return `
+      return `
 【写真${index + 1}】
 
 ファイル名：
@@ -666,39 +603,28 @@ ${location}
 関連予定：
 ${calendar}
 `.trim();
-      }
-    )
-    .join(
-      "\n\n"
-    );
+    })
+    .join("\n\n");
 }
 
 // =====================================
 // 撮影日時を日本時間へ変換
 // =====================================
 
-function formatDateValueJST(
-  value
-) {
+function formatDateValueJST(value) {
   if (!value) {
-    return (
-      "取得できません"
-    );
+    return "取得できません";
   }
 
   const date =
-    new Date(
-      value
-    );
+    new Date(value);
 
   if (
     Number.isNaN(
       date.getTime()
     )
   ) {
-    return String(
-      value
-    );
+    return String(value);
   }
 
   const dateText =
@@ -732,9 +658,7 @@ function formatDateValueJST(
         hour12:
           false
       }
-    ).format(
-      date
-    );
+    ).format(date);
 
   const timePeriod =
     getJapaneseTimePeriod(
@@ -754,18 +678,14 @@ function getJapaneseTimePeriod(
   dateValue
 ) {
   const date =
-    new Date(
-      dateValue
-    );
+    new Date(dateValue);
 
   if (
     Number.isNaN(
       date.getTime()
     )
   ) {
-    return (
-      "時間帯不明"
-    );
+    return "時間帯不明";
   }
 
   const hourText =
@@ -781,17 +701,14 @@ function getJapaneseTimePeriod(
         hour12:
           false
       }
-    ).format(
-      date
-    );
+    ).format(date);
 
-  const hour =
-    Number(
-      hourText.replace(
-        /\D/g,
-        ""
-      )
-    );
+  const hour = Number(
+    hourText.replace(
+      /\D/g,
+      ""
+    )
+  );
 
   if (
     hour >= 5 &&
@@ -834,23 +751,19 @@ function createLocationText(
 ) {
   const hasLatitude =
     latitude !== null &&
-    latitude !==
-      undefined &&
+    latitude !== undefined &&
     latitude !== "";
 
   const hasLongitude =
     longitude !== null &&
-    longitude !==
-      undefined &&
+    longitude !== undefined &&
     longitude !== "";
 
   if (
     !hasLatitude ||
     !hasLongitude
   ) {
-    return (
-      "取得できません"
-    );
+    return "取得できません";
   }
 
   return (
@@ -867,12 +780,9 @@ function createCalendarEventText(
 ) {
   if (
     !relatedEvent ||
-    typeof relatedEvent !==
-      "object"
+    typeof relatedEvent !== "object"
   ) {
-    return (
-      "関連予定なし"
-    );
+    return "関連予定なし";
   }
 
   const title =
@@ -885,24 +795,18 @@ function createCalendarEventText(
       : "タイトルなし";
 
   const start =
-    relatedEvent.start
-      ?.dateTime ||
-    relatedEvent.start
-      ?.date ||
+    relatedEvent.start?.dateTime ||
+    relatedEvent.start?.date ||
     null;
 
   const end =
-    relatedEvent.end
-      ?.dateTime ||
-    relatedEvent.end
-      ?.date ||
+    relatedEvent.end?.dateTime ||
+    relatedEvent.end?.date ||
     null;
 
   if (
-    relatedEvent.start
-      ?.date &&
-    relatedEvent.end
-      ?.date
+    relatedEvent.start?.date &&
+    relatedEvent.end?.date
   ) {
     return (
       `${title}（終日予定）`
@@ -914,14 +818,10 @@ function createCalendarEventText(
     end
   ) {
     const startText =
-      formatTimeJST(
-        start
-      );
+      formatTimeJST(start);
 
     const endText =
-      formatTimeJST(
-        end
-      );
+      formatTimeJST(end);
 
     return (
       `${title}（${startText}～${endText}・日本時間）`
@@ -935,28 +835,20 @@ function createCalendarEventText(
 // カレンダー時刻を日本時間へ変換
 // =====================================
 
-function formatTimeJST(
-  value
-) {
+function formatTimeJST(value) {
   if (!value) {
-    return (
-      "時刻不明"
-    );
+    return "時刻不明";
   }
 
   const date =
-    new Date(
-      value
-    );
+    new Date(value);
 
   if (
     Number.isNaN(
       date.getTime()
     )
   ) {
-    return String(
-      value
-    );
+    return String(value);
   }
 
   return new Intl.DateTimeFormat(
@@ -974,9 +866,7 @@ function formatTimeJST(
       hour12:
         false
     }
-  ).format(
-    date
-  );
+  ).format(date);
 }
 
 // =====================================
@@ -986,8 +876,6 @@ function formatTimeJST(
 function createAnalysisPrompt({
   category,
   memo,
-  userPriority,
-  userPriorityLabel,
   fileCount,
   formattedPhotoContexts
 }) {
@@ -1081,12 +969,11 @@ function createAnalysisPrompt({
 
 次の観点を考慮してください。
 
-・感情
-・学び
 ・人とのつながり
-・将来への影響
+・感情
 ・希少性
-・記憶として残る濃さ
+・学び
+・将来への影響
 
 写真の見た目を説明するだけにしないでください。
 
@@ -1099,11 +986,11 @@ function createAnalysisPrompt({
 次の5項目について、
 何点にしたかと具体的な採点根拠を説明してください。
 
-・emotion
-・learning
 ・relationship
-・future
+・emotion
 ・rarity
+・learning
+・future
 
 各項目について、
 「〇点。理由は～」のように説明してください。
@@ -1117,25 +1004,6 @@ ${category || "未設定"}
 
 本人のメモ：
 ${memo || "メモなし"}
-
-ユーザーが最も重視した要素：
-${userPriorityLabel || "未選択"}
-
-ユーザー重視項目の内部キー：
-${userPriority || "未選択"}
-
-この選択は、ユーザー本人の価値観を示す重要な情報です。
-
-ただし、選択された項目の点数を自動的に5点にしてはいけません。
-
-写真、メモ、日時、場所、予定から根拠がある範囲で評価してください。
-
-複数の項目に同程度の根拠がある場合は、
-ユーザーが選択した項目をより重視して、
-思い出の意味や価値を解釈してください。
-
-ユーザーの選択は、
-点数を強制的に変更するものではありません。
 
 思い出の判断に使用する写真枚数：
 ${fileCount}枚
@@ -1160,6 +1028,29 @@ ${formattedPhotoContexts}
 【25点満点の評価基準】
 =====================================
 
+relationship：
+家族、友人、仲間などとのつながり
+
+0点：
+人との関係を判断できない
+
+1点：
+人との関わりが弱い
+
+2点：
+一定の関わりがある
+
+3点：
+交流や共有体験がある
+
+4点：
+関係を深める重要な体験である
+
+5点：
+非常に強い絆や重要な関係性を表す
+
+-------------------------------------
+
 emotion：
 この思い出に伴う感情や印象の強さ
 
@@ -1180,6 +1071,30 @@ emotion：
 
 5点：
 非常に強く記憶に残る感情を伴う
+
+-------------------------------------
+
+rarity：
+記念性、希少性、特別性、記憶として残る濃さ
+
+0点：
+特別性を判断できない
+
+1点：
+日常的で記憶性が低い
+
+2点：
+やや印象に残る
+
+3点：
+特別な要素がある
+
+4点：
+記念性や希少性が高い
+
+5点：
+二度と同じ形では経験できない、
+非常に特別な思い出である
 
 -------------------------------------
 
@@ -1206,29 +1121,6 @@ learning：
 
 -------------------------------------
 
-relationship：
-家族、友人、仲間などとのつながり
-
-0点：
-人との関係を判断できない
-
-1点：
-人との関わりが弱い
-
-2点：
-一定の関わりがある
-
-3点：
-交流や共有体験がある
-
-4点：
-関係を深める重要な体験である
-
-5点：
-非常に強い絆や重要な関係性を表す
-
--------------------------------------
-
 future：
 将来の考え方、行動、成長、人間関係への影響
 
@@ -1250,47 +1142,23 @@ future：
 5点：
 人生の方向性を変えるほどの影響がある
 
--------------------------------------
-
-rarity：
-記念性、希少性、特別性、記憶として残る濃さ
-
-0点：
-特別性を判断できない
-
-1点：
-日常的で記憶性が低い
-
-2点：
-やや印象に残る
-
-3点：
-特別な要素がある
-
-4点：
-記念性や希少性が高い
-
-5点：
-二度と同じ形では経験できない、
-非常に特別な思い出である
-
 =====================================
 【合計点】
 =====================================
 
+relationship：
+0～5点
+
 emotion：
+0～5点
+
+rarity：
 0～5点
 
 learning：
 0～5点
 
-relationship：
-0～5点
-
 future：
-0～5点
-
-rarity：
 0～5点
 
 5項目の合計を、
@@ -1306,9 +1174,6 @@ rarity：
 ・写真1枚ごとに点数を付けてはいけません。
 ・写真枚数を点数に掛けてはいけません。
 ・複数の写真でも合計は最大25点です。
-・ユーザーが選択した重視項目は、本人の価値観として解釈に反映してください。
-・ただし、重視項目を選んだだけで、その項目を高得点にしてはいけません。
-・点数は必ず写真、メモ、日時、場所、予定の根拠から決めてください。
 ・memoryTitleは思い出の短い名前にしてください。
 ・memorySummaryは写真全体から分かる思い出の概要にしてください。
 ・contextMeaningは付随情報から分かる背景や意味にしてください。
@@ -1358,30 +1223,29 @@ function normalizeScores(
   result
 ) {
   return {
-    emotion:
-      normalizeScore(
-        result.emotion
-      ),
-
-    learning:
-      normalizeScore(
-        result.learning ??
-        result.meaning
-      ),
-
     relationship:
       normalizeScore(
         result.relationship
       ),
 
-    future:
+    emotion:
       normalizeScore(
-        result.future
+        result.emotion
       ),
 
     rarity:
       normalizeScore(
         result.rarity
+      ),
+
+    learning:
+      normalizeScore(
+        result.learning
+      ),
+
+    future:
+      normalizeScore(
+        result.future
       )
   };
 }
@@ -1434,11 +1298,11 @@ function calculateScore(
   scores
 ) {
   return (
-    scores.emotion +
-    scores.learning +
     scores.relationship +
-    scores.future +
-    scores.rarity
+    scores.emotion +
+    scores.rarity +
+    scores.learning +
+    scores.future
   );
 }
 
@@ -1449,8 +1313,6 @@ function calculateScore(
 async function regenerateDescriptions({
   category,
   memo,
-  userPriority,
-  userPriorityLabel,
   formattedPhotoContexts,
   descriptions,
   scores
@@ -1509,9 +1371,6 @@ ${category || "未設定"}
 メモ：
 ${memo || "メモなし"}
 
-ユーザーが最も重視した要素：
-${userPriorityLabel || "未選択"}（${userPriority || "未選択"}）
-
 写真情報：
 ${formattedPhotoContexts}
 
@@ -1521,22 +1380,22 @@ UTCへ変換し直さないでください。
 点数：
 ${JSON.stringify(scores, null, 2)}
 
+評価項目は次の5項目です。
+
+・人間関係
+・感情
+・希少性
+・学び
+・将来への影響
+
 5文章は同じ内容にしないでください。
-
-ユーザーが重視した要素は、
-文章の解釈には反映してください。
-
-ただし、
-ユーザーが選んだ項目を自動的に高得点にしたり、
-現在の点数を変更したりしてはいけません。
 
 JSON以外は出力しないでください。
 `;
 
   const response =
     await ai.models.generateContent({
-      model:
-        "gemini-2.5-flash",
+      model: "gemini-2.5-flash",
 
       contents: [
         {
@@ -1559,36 +1418,31 @@ JSON以外は出力しないでください。
 
           properties: {
             memoryTitle: {
-              type:
-                "string",
+              type: "string",
               description:
                 "1つの思い出を表す短いタイトル"
             },
 
             memorySummary: {
-              type:
-                "string",
+              type: "string",
               description:
                 "写真全体から分かる1つの思い出の概要"
             },
 
             contextMeaning: {
-              type:
-                "string",
+              type: "string",
               description:
                 "日時、場所、予定、メモから分かる背景や意味"
             },
 
             valueReason: {
-              type:
-                "string",
+              type: "string",
               description:
                 "この思い出を将来残す価値"
             },
 
             reason: {
-              type:
-                "string",
+              type: "string",
               description:
                 "5項目の点数と採点根拠"
             }
@@ -1603,8 +1457,7 @@ JSON以外は出力しないでください。
           ]
         },
 
-        temperature:
-          0.7
+        temperature: 0.7
       }
     });
 
@@ -1685,8 +1538,7 @@ function findDuplicateFields(
     ]
   ];
 
-  const duplicates =
-    [];
+  const duplicates = [];
 
   for (
     let i = 0;
@@ -1742,26 +1594,17 @@ function areTextsSimilar(
       textB
     );
 
-  if (
-    !a ||
-    !b
-  ) {
+  if (!a || !b) {
     return false;
   }
 
-  if (
-    a === b
-  ) {
+  if (a === b) {
     return true;
   }
 
   if (
-    a.includes(
-      b
-    ) ||
-    b.includes(
-      a
-    )
+    a.includes(b) ||
+    b.includes(a)
   ) {
     return true;
   }
@@ -1776,12 +1619,10 @@ function areTextsSimilar(
       ? a
       : b;
 
-  let matchedCount =
-    0;
+  let matchedCount = 0;
 
   for (
-    const character of
-    shorter
+    const character of shorter
   ) {
     if (
       longer.includes(
@@ -1796,9 +1637,7 @@ function areTextsSimilar(
     matchedCount /
     shorter.length;
 
-  return (
-    similarity >= 0.9
-  );
+  return similarity >= 0.9;
 }
 
 // =====================================
@@ -1851,9 +1690,7 @@ function normalizeScore(
   value
 ) {
   const number =
-    Number(
-      value
-    );
+    Number(value);
 
   if (
     !Number.isFinite(
@@ -1867,9 +1704,7 @@ function normalizeScore(
     0,
     Math.min(
       5,
-      Math.round(
-        number
-      )
+      Math.round(number)
     )
   );
 }
@@ -1883,8 +1718,7 @@ function normalizeText(
   fallback
 ) {
   if (
-    typeof value !==
-    "string"
+    typeof value !== "string"
   ) {
     return fallback;
   }
@@ -1892,9 +1726,7 @@ function normalizeText(
   const text =
     value.trim();
 
-  if (
-    !text
-  ) {
+  if (!text) {
     return fallback;
   }
 
@@ -1910,18 +1742,13 @@ function normalizeNullableValue(
 ) {
   if (
     value === null ||
-    value ===
-      undefined ||
+    value === undefined ||
     value === ""
   ) {
-    return (
-      "取得できません"
-    );
+    return "取得できません";
   }
 
-  return String(
-    value
-  );
+  return String(value);
 }
 
 // =====================================
@@ -1932,63 +1759,8 @@ function hasText(
   value
 ) {
   return (
-    typeof value ===
-      "string" &&
-    value.trim() !==
-      ""
-  );
-}
-
-// =====================================
-// ユーザー重視項目
-// =====================================
-
-function normalizeUserPriority(
-  value
-) {
-  const priority =
-    String(
-      value || ""
-    ).trim();
-
-  const allowed = [
-    "emotion",
-    "relationship",
-    "learning",
-    "rarity",
-    "future"
-  ];
-
-  return allowed.includes(
-    priority
-  )
-    ? priority
-    : "";
-}
-
-function getUserPriorityLabel(
-  priority
-) {
-  const labels = {
-    emotion:
-      "感情",
-
-    relationship:
-      "人間関係",
-
-    learning:
-      "学び",
-
-    rarity:
-      "希少性",
-
-    future:
-      "将来への影響"
-  };
-
-  return (
-    labels[priority] ||
-    "未選択"
+    typeof value === "string" &&
+    value.trim() !== ""
   );
 }
 
@@ -1999,8 +1771,6 @@ function getUserPriorityLabel(
 function logRequestInformation({
   category,
   memo,
-  userPriority,
-  userPriorityLabel,
   files,
   photoContexts
 }) {
@@ -2025,12 +1795,6 @@ function logRequestInformation({
   console.log(
     "メモ:",
     memo
-  );
-
-  console.log(
-    "ユーザー重視項目:",
-    userPriority,
-    userPriorityLabel
   );
 
   console.log(
@@ -2064,8 +1828,7 @@ app.use(
     next
   ) => {
     if (
-      error instanceof
-      multer.MulterError
+      error instanceof multer.MulterError
     ) {
       console.error(
         "Multerエラー:",
@@ -2073,78 +1836,46 @@ app.use(
       );
 
       if (
-        error.code ===
-        "LIMIT_FILE_SIZE"
+        error.code === "LIMIT_FILE_SIZE"
       ) {
-        return res
-          .status(400)
-          .json({
-            status:
-              "error",
-
-            serverVersion:
-              SERVER_VERSION,
-
-            error:
-              "画像のファイルサイズが大きすぎます。1枚10MB以下にしてください。"
-          });
+        return res.status(400).json({
+          status: "error",
+          serverVersion: SERVER_VERSION,
+          error:
+            "画像のファイルサイズが大きすぎます。1枚10MB以下にしてください。"
+        });
       }
 
       if (
-        error.code ===
-        "LIMIT_FILE_COUNT"
+        error.code === "LIMIT_FILE_COUNT"
       ) {
-        return res
-          .status(400)
-          .json({
-            status:
-              "error",
-
-            serverVersion:
-              SERVER_VERSION,
-
-            error:
-              "選択できる写真は最大10枚です。"
-          });
+        return res.status(400).json({
+          status: "error",
+          serverVersion: SERVER_VERSION,
+          error:
+            "選択できる写真は最大10枚です。"
+        });
       }
 
-      return res
-        .status(400)
-        .json({
-          status:
-            "error",
-
-          serverVersion:
-            SERVER_VERSION,
-
-          error:
-            error.message
-        });
+      return res.status(400).json({
+        status: "error",
+        serverVersion: SERVER_VERSION,
+        error: error.message
+      });
     }
 
-    if (
-      error
-    ) {
+    if (error) {
       console.error(
         "サーバーエラー:",
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          status:
-            "error",
-
-          serverVersion:
-            SERVER_VERSION,
-
-          error:
-            "サーバー内部でエラーが発生しました。",
-
-          detail:
-            error.message
-        });
+      return res.status(500).json({
+        status: "error",
+        serverVersion: SERVER_VERSION,
+        error: "サーバー内部でエラーが発生しました。",
+        detail: error.message
+      });
     }
 
     next();
@@ -2182,6 +1913,11 @@ app.listen(
     );
 
     console.log(
+      "評価項目:",
+      "人間関係・感情・希少性・学び・将来への影響"
+    );
+
+    console.log(
       "最大点:",
       "25点"
     );
@@ -2191,3 +1927,4 @@ app.listen(
     );
   }
 );
+````
