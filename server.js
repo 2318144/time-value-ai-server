@@ -12,13 +12,14 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-25-profile-v12";
+const SERVER_VERSION = "memory-value-25-history-learning-v16";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
 
 const MAX_PHOTO_COUNT = 10;
 const MAX_AI_PHOTO_COUNT = 3;
+const MAX_HISTORY_COUNT = 20;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 app.use(cors());
@@ -141,6 +142,18 @@ const analysisSchema = {
       type: "string",
       description:
         "本人情報をどのように評価へ反映したか。利用していない場合は、その理由を説明する"
+    },
+
+    usedMemoryHistory: {
+      type: "boolean",
+      description:
+        "過去の思い出から算出した価値傾向を今回の評価へ実際に利用した場合はtrue"
+    },
+
+    historyReferenceReason: {
+      type: "string",
+      description:
+        "過去の思い出の傾向を今回の評価へどう反映したか。利用していない場合はその理由"
     }
   },
 
@@ -157,7 +170,9 @@ const analysisSchema = {
     "reason",
     "usedUserProfile",
     "usedProfileItems",
-    "userProfileReason"
+    "userProfileReason",
+    "usedMemoryHistory",
+    "historyReferenceReason"
   ]
 };
 
@@ -269,6 +284,16 @@ app.post(
           req.body.userProfile
         );
 
+      const memoryHistory =
+        parseMemoryHistory(
+          req.body.memoryHistory
+        );
+
+      const learnedValueProfile =
+        createLearnedValueProfile(
+          memoryHistory
+        );
+
       const files =
         req.files || [];
 
@@ -281,6 +306,8 @@ app.post(
         category,
         memo,
         userProfile,
+        memoryHistory,
+        learnedValueProfile,
         files,
         photoContexts
       });
@@ -313,7 +340,8 @@ app.post(
           memo,
           fileCount: files.length,
           formattedPhotoContexts,
-          userProfile
+          userProfile,
+          learnedValueProfile
         });
 
       console.log(
@@ -396,6 +424,12 @@ app.post(
       const profileUsage =
         normalizeProfileUsage(result);
 
+      const historyUsage =
+        normalizeHistoryUsage(
+          result,
+          learnedValueProfile
+        );
+
       /*
         各説明文が同じ文章になった場合は、
         文章部分だけ再生成する。
@@ -477,6 +511,17 @@ app.post(
 
         userProfileReason:
           profileUsage.userProfileReason,
+
+        usedMemoryHistory:
+          historyUsage.usedMemoryHistory,
+
+        historyReferenceReason:
+          historyUsage.historyReferenceReason,
+
+        learnedValueProfile,
+
+        historyCountUsed:
+          learnedValueProfile.historyCount,
 
         receivedUserProfile: {
           birthday:
@@ -602,6 +647,439 @@ function parseUserProfile(
       job: ""
     };
   }
+}
+
+// =====================================
+// 過去の思い出JSONの解析
+// =====================================
+
+function parseMemoryHistory(
+  memoryHistoryText
+) {
+  try {
+    const parsed =
+      JSON.parse(
+        memoryHistoryText || "[]"
+      );
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .slice(0, MAX_HISTORY_COUNT)
+      .map((memory) => {
+        const scores = {
+          emotion:
+            normalizeScore(
+              memory.emotion
+            ),
+
+          meaning:
+            normalizeScore(
+              memory.meaning ??
+              memory.learning ??
+              memory.experience
+            ),
+
+          relationship:
+            normalizeScore(
+              memory.relationship ??
+              memory.people
+            ),
+
+          future:
+            normalizeScore(
+              memory.future ??
+              memory.futureImpact ??
+              memory.growth
+            ),
+
+          rarity:
+            normalizeScore(
+              memory.rarity ??
+              memory.special
+            )
+        };
+
+        const calculatedTotal =
+          calculateScore(scores);
+
+        return {
+          category:
+            normalizeHistoryText(
+              memory.category
+            ),
+
+          memo:
+            normalizeHistoryText(
+              memory.memo
+            ),
+
+          memoryTitle:
+            normalizeHistoryText(
+              memory.memoryTitle ??
+              memory.title
+            ),
+
+          memorySummary:
+            normalizeHistoryText(
+              memory.memorySummary ??
+              memory.summary
+            ),
+
+          contextMeaning:
+            normalizeHistoryText(
+              memory.contextMeaning
+            ),
+
+          valueReason:
+            normalizeHistoryText(
+              memory.valueReason
+            ),
+
+          emotion:
+            scores.emotion,
+
+          meaning:
+            scores.meaning,
+
+          relationship:
+            scores.relationship,
+
+          future:
+            scores.future,
+
+          rarity:
+            scores.rarity,
+
+          totalScore:
+            normalizeHistoryTotalScore(
+              memory.totalScore,
+              calculatedTotal
+            ),
+
+          createdAt:
+            normalizeHistoryText(
+              memory.createdAt ??
+              memory.date
+            )
+        };
+      });
+
+  } catch (error) {
+    console.error(
+      "memoryHistory解析エラー:",
+      error
+    );
+
+    return [];
+  }
+}
+
+// =====================================
+// 過去の思い出から利用者の価値傾向を作成
+// =====================================
+
+function createLearnedValueProfile(
+  memoryHistory
+) {
+  if (
+    !Array.isArray(memoryHistory) ||
+    memoryHistory.length === 0
+  ) {
+    return {
+      historyCount: 0,
+
+      averages: {
+        emotion: 0,
+        meaning: 0,
+        relationship: 0,
+        future: 0,
+        rarity: 0,
+        totalScore: 0
+      },
+
+      strongestCriteria: [],
+      frequentCategories: [],
+      representativeMemories: [],
+
+      summary:
+        "過去の思い出がないため、価値傾向はまだ形成されていません。"
+    };
+  }
+
+  const scoreKeys = [
+    "emotion",
+    "meaning",
+    "relationship",
+    "future",
+    "rarity"
+  ];
+
+  const criterionLabels = {
+    emotion: "感情",
+    meaning: "意味・学び",
+    relationship: "人間関係",
+    future: "将来への影響",
+    rarity: "希少性"
+  };
+
+  const sums = {
+    emotion: 0,
+    meaning: 0,
+    relationship: 0,
+    future: 0,
+    rarity: 0,
+    totalScore: 0
+  };
+
+  const categoryCounts =
+    new Map();
+
+  memoryHistory.forEach(
+    (memory) => {
+      scoreKeys.forEach(
+        (key) => {
+          sums[key] +=
+            normalizeScore(
+              memory[key]
+            );
+        }
+      );
+
+      sums.totalScore +=
+        normalizeHistoryTotalScore(
+          memory.totalScore,
+          calculateScore(memory)
+        );
+
+      const category =
+        normalizeHistoryText(
+          memory.category
+        );
+
+      if (category) {
+        categoryCounts.set(
+          category,
+          (categoryCounts.get(category) || 0) + 1
+        );
+      }
+    }
+  );
+
+  const averages = {
+    emotion:
+      roundToOneDecimal(
+        sums.emotion /
+        memoryHistory.length
+      ),
+
+    meaning:
+      roundToOneDecimal(
+        sums.meaning /
+        memoryHistory.length
+      ),
+
+    relationship:
+      roundToOneDecimal(
+        sums.relationship /
+        memoryHistory.length
+      ),
+
+    future:
+      roundToOneDecimal(
+        sums.future /
+        memoryHistory.length
+      ),
+
+    rarity:
+      roundToOneDecimal(
+        sums.rarity /
+        memoryHistory.length
+      ),
+
+    totalScore:
+      roundToOneDecimal(
+        sums.totalScore /
+        memoryHistory.length
+      )
+  };
+
+  const strongestCriteria =
+    scoreKeys
+      .map((key) => ({
+        key,
+        label:
+          criterionLabels[key],
+        average:
+          averages[key]
+      }))
+      .sort(
+        (a, b) =>
+          b.average -
+          a.average
+      )
+      .slice(0, 3);
+
+  const frequentCategories =
+    Array.from(
+      categoryCounts.entries()
+    )
+      .map(
+        ([category, count]) => ({
+          category,
+          count
+        })
+      )
+      .sort(
+        (a, b) =>
+          b.count -
+          a.count
+      )
+      .slice(0, 5);
+
+  const representativeMemories =
+    [...memoryHistory]
+      .sort(
+        (a, b) =>
+          b.totalScore -
+          a.totalScore
+      )
+      .slice(0, 3)
+      .map((memory) => ({
+        memoryTitle:
+          memory.memoryTitle ||
+          "タイトルなし",
+
+        category:
+          memory.category ||
+          "未設定",
+
+        totalScore:
+          memory.totalScore,
+
+        valueReason:
+          memory.valueReason ||
+          memory.contextMeaning ||
+          memory.memorySummary ||
+          "説明なし"
+      }));
+
+  const strongestText =
+    strongestCriteria
+      .map(
+        (item) =>
+          `${item.label}（平均${item.average}点）`
+      )
+      .join("、");
+
+  const categoryText =
+    frequentCategories.length > 0
+      ? frequentCategories
+          .map(
+            (item) =>
+              `${item.category}（${item.count}件）`
+          )
+          .join("、")
+      : "分類できるカテゴリなし";
+
+  return {
+    historyCount:
+      memoryHistory.length,
+
+    averages,
+
+    strongestCriteria,
+
+    frequentCategories,
+
+    representativeMemories,
+
+    summary:
+      `過去${memoryHistory.length}件では、${strongestText}が比較的高く、頻出カテゴリは${categoryText}です。`
+  };
+}
+
+// =====================================
+// 学習した価値傾向をプロンプト用文章へ変換
+// =====================================
+
+function formatLearnedValueProfile(
+  learnedValueProfile
+) {
+  if (
+    !learnedValueProfile ||
+    learnedValueProfile.historyCount === 0
+  ) {
+    return `
+過去の思い出：
+登録なし
+
+今回の評価では、
+過去履歴による個人化を行わないでください。
+`.trim();
+  }
+
+  const strongestText =
+    learnedValueProfile
+      .strongestCriteria
+      .map(
+        (item) =>
+          `・${item.label}：平均${item.average}点`
+      )
+      .join("\n");
+
+  const categoriesText =
+    learnedValueProfile
+      .frequentCategories
+      .length > 0
+      ? learnedValueProfile
+          .frequentCategories
+          .map(
+            (item) =>
+              `・${item.category}：${item.count}件`
+          )
+          .join("\n")
+      : "・該当なし";
+
+  const memoriesText =
+    learnedValueProfile
+      .representativeMemories
+      .length > 0
+      ? learnedValueProfile
+          .representativeMemories
+          .map(
+            (memory, index) =>
+              `${index + 1}. ${memory.memoryTitle}／${memory.category}／${memory.totalScore}点\n   ${memory.valueReason}`
+          )
+          .join("\n")
+      : "該当なし";
+
+  return `
+履歴件数：
+${learnedValueProfile.historyCount}件
+
+5項目の平均：
+・感情：${learnedValueProfile.averages.emotion}
+・意味・学び：${learnedValueProfile.averages.meaning}
+・人間関係：${learnedValueProfile.averages.relationship}
+・将来への影響：${learnedValueProfile.averages.future}
+・希少性：${learnedValueProfile.averages.rarity}
+・合計：${learnedValueProfile.averages.totalScore}／25
+
+比較的高い観点：
+${strongestText}
+
+頻出カテゴリ：
+${categoriesText}
+
+代表的な高価値の思い出：
+${memoriesText}
+
+傾向の要約：
+${learnedValueProfile.summary}
+`.trim();
 }
 
 // =====================================
@@ -992,8 +1470,14 @@ function createAnalysisPrompt({
   memo,
   fileCount,
   formattedPhotoContexts,
-  userProfile
+  userProfile,
+  learnedValueProfile
 }) {
+  const formattedLearnedProfile =
+    formatLearnedValueProfile(
+      learnedValueProfile
+    );
+
   return `
 あなたは「時間の価値の可視化」アプリで使用する分析AIです。
 
@@ -1144,6 +1628,31 @@ ${userProfile.gender || "未設定"}
 
 職業：
 ${userProfile.job || "未設定"}
+
+=====================================
+【7：過去の思い出から学習した価値傾向】
+=====================================
+
+次の情報は、
+この利用者が過去に登録した思い出の評価結果を
+統計的にまとめたものです。
+
+${formattedLearnedProfile}
+
+過去履歴は、
+今回の思い出と関連する場合だけ参考にしてください。
+
+次のルールを守ってください。
+
+・過去の平均点を今回の点数へそのままコピーしない
+・過去に高かった観点だからという理由だけで点数を上げない
+・今回の写真、メモ、日時、場所、予定を主な根拠にする
+・過去傾向は、同じカテゴリや似た意味を持つ場合の補助根拠とする
+・履歴が少ない場合は強い傾向として断定しない
+・今回と関係しない過去の思い出は利用しない
+・利用した場合はusedMemoryHistoryをtrueにする
+・利用しなかった場合はusedMemoryHistoryをfalseにする
+・historyReferenceReasonには、利用方法または利用しなかった理由を書く
 
 =====================================
 【入力情報】
@@ -1333,6 +1842,9 @@ rarity：
 ・usedProfileItemsは利用した本人情報の項目名を示してください。
 ・userProfileReasonは本人情報をどのように評価へ反映したかを説明してください。
 ・本人情報を利用していない場合も、userProfileReasonを空文字にしないでください。
+・usedMemoryHistoryは過去履歴を実際に評価へ使ったかを示してください。
+・historyReferenceReasonは過去履歴の利用方法または利用しなかった理由を説明してください。
+・過去履歴の平均点を機械的に今回の点数へ適用しないでください。
 ・各文章を同じ内容にしないでください。
 ・同じ文章を複数項目に書かないでください。
 ・不明な情報を事実として断定しないでください。
@@ -1477,6 +1989,41 @@ function normalizeProfileUsage(
         ? usedProfileItems
         : "なし",
     userProfileReason
+  };
+}
+
+// =====================================
+// 過去履歴利用結果の補正
+// =====================================
+
+function normalizeHistoryUsage(
+  result,
+  learnedValueProfile
+) {
+  const hasHistory =
+    learnedValueProfile &&
+    learnedValueProfile.historyCount > 0;
+
+  const usedMemoryHistory =
+    hasHistory &&
+    result.usedMemoryHistory === true;
+
+  const historyReferenceReason =
+    normalizeText(
+      result.historyReferenceReason,
+
+      hasHistory
+        ? (
+            usedMemoryHistory
+              ? "過去の思い出の価値傾向を今回の評価へ反映しました。"
+              : "今回の思い出との明確な関連が確認できなかったため、過去履歴は点数評価に利用していません。"
+          )
+        : "過去の思い出が登録されていないため、履歴による個人化は行っていません。"
+    );
+
+  return {
+    usedMemoryHistory,
+    historyReferenceReason
   };
 }
 
@@ -1951,6 +2498,69 @@ function normalizeProfileValue(
 }
 
 // =====================================
+// 過去履歴用の文字列補正
+// =====================================
+
+function normalizeHistoryText(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+// =====================================
+// 過去履歴の合計点補正
+// =====================================
+
+function normalizeHistoryTotalScore(
+  value,
+  fallback = 0
+) {
+  const number =
+    Number(value);
+
+  if (
+    Number.isFinite(number)
+  ) {
+    return Math.max(
+      0,
+      Math.min(
+        25,
+        Math.round(number)
+      )
+    );
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      25,
+      Math.round(
+        Number(fallback) || 0
+      )
+    )
+  );
+}
+
+// =====================================
+// 小数第1位へ丸める
+// =====================================
+
+function roundToOneDecimal(
+  value
+) {
+  return Math.round(
+    Number(value) * 10
+  ) / 10;
+}
+
+// =====================================
 // 文字列が存在するか確認
 // =====================================
 
@@ -1971,6 +2581,8 @@ function logRequestInformation({
   category,
   memo,
   userProfile,
+  memoryHistory,
+  learnedValueProfile,
   files,
   photoContexts
 }) {
@@ -2001,6 +2613,20 @@ function logRequestInformation({
     "本人情報:",
     JSON.stringify(
       userProfile,
+      null,
+      2
+    )
+  );
+
+  console.log(
+    "過去の思い出件数:",
+    memoryHistory.length
+  );
+
+  console.log(
+    "学習した価値傾向:",
+    JSON.stringify(
+      learnedValueProfile,
       null,
       2
     )
@@ -2124,6 +2750,16 @@ app.listen(
     console.log(
       "最大点:",
       "25点"
+    );
+
+    console.log(
+      "個人化:",
+      "本人情報＋過去の思い出履歴"
+    );
+
+    console.log(
+      "最大履歴件数:",
+      MAX_HISTORY_COUNT
     );
 
     console.log(
