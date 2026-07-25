@@ -1,6 +1,3 @@
-修正版全文です。元の`server(7).js`内に残っていた`meaning`を、評価基準に合わせてすべて`learning`へ変更しています。
-
-````javascript
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -15,7 +12,7 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-25-learning-v11";
+const SERVER_VERSION = "memory-value-25-profile-v12";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
@@ -82,14 +79,6 @@ const analysisSchema = {
         "この思い出が本人にとって、なぜ将来残す価値があるのかを説明する"
     },
 
-    relationship: {
-      type: "integer",
-      minimum: 0,
-      maximum: 5,
-      description:
-        "家族、友人、仲間などとのつながり"
-    },
-
     emotion: {
       type: "integer",
       minimum: 0,
@@ -98,20 +87,20 @@ const analysisSchema = {
         "この思い出に伴う感情や印象の強さ"
     },
 
-    rarity: {
+    meaning: {
       type: "integer",
       minimum: 0,
       maximum: 5,
       description:
-        "記念性、希少性、特別性、記憶として残る濃さ"
+        "この思い出が持つ意味、学び、気付き、成長"
     },
 
-    learning: {
+    relationship: {
       type: "integer",
       minimum: 0,
       maximum: 5,
       description:
-        "この思い出から得られる学び、気付き、成長"
+        "家族、友人、仲間などとのつながり"
     },
 
     future: {
@@ -122,10 +111,36 @@ const analysisSchema = {
         "この思い出が将来の行動、考え方、成長、人間関係へ与える影響"
     },
 
+    rarity: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5,
+      description:
+        "記念性、希少性、特別性、記憶として残る濃さ"
+    },
+
     reason: {
       type: "string",
       description:
-        "relationship、emotion、rarity、learning、futureの各点数と採点根拠"
+        "emotion、meaning、relationship、future、rarityの各点数と採点根拠"
+    },
+
+    usedUserProfile: {
+      type: "boolean",
+      description:
+        "本人情報を今回の評価判断に実際に利用した場合はtrue、利用しなかった場合はfalse"
+    },
+
+    usedProfileItems: {
+      type: "string",
+      description:
+        "評価に利用した本人情報の項目。例：年齢、職業。利用していない場合は「なし」"
+    },
+
+    userProfileReason: {
+      type: "string",
+      description:
+        "本人情報をどのように評価へ反映したか。利用していない場合は、その理由を説明する"
     }
   },
 
@@ -134,12 +149,15 @@ const analysisSchema = {
     "memorySummary",
     "contextMeaning",
     "valueReason",
-    "relationship",
     "emotion",
-    "rarity",
-    "learning",
+    "meaning",
+    "relationship",
     "future",
-    "reason"
+    "rarity",
+    "reason",
+    "usedUserProfile",
+    "usedProfileItems",
+    "userProfileReason"
   ]
 };
 
@@ -246,6 +264,11 @@ app.post(
         req.body.category || ""
       ).trim();
 
+      const userProfile =
+        parseUserProfile(
+          req.body.userProfile
+        );
+
       const files =
         req.files || [];
 
@@ -257,6 +280,7 @@ app.post(
       logRequestInformation({
         category,
         memo,
+        userProfile,
         files,
         photoContexts
       });
@@ -288,7 +312,8 @@ app.post(
           category,
           memo,
           fileCount: files.length,
-          formattedPhotoContexts
+          formattedPhotoContexts,
+          userProfile
         });
 
       console.log(
@@ -368,6 +393,9 @@ app.post(
       let descriptions =
         normalizeDescriptions(result);
 
+      const profileUsage =
+        normalizeProfileUsage(result);
+
       /*
         各説明文が同じ文章になった場合は、
         文章部分だけ再生成する。
@@ -421,25 +449,48 @@ app.post(
         valueReason:
           descriptions.valueReason,
 
-        relationship:
-          scores.relationship,
-
         emotion:
           scores.emotion,
 
-        rarity:
-          scores.rarity,
+        meaning:
+          scores.meaning,
 
-        learning:
-          scores.learning,
+        relationship:
+          scores.relationship,
 
         future:
           scores.future,
+
+        rarity:
+          scores.rarity,
 
         totalScore,
 
         reason:
           descriptions.reason,
+
+        usedUserProfile:
+          profileUsage.usedUserProfile,
+
+        usedProfileItems:
+          profileUsage.usedProfileItems,
+
+        userProfileReason:
+          profileUsage.userProfileReason,
+
+        receivedUserProfile: {
+          birthday:
+            userProfile.birthday,
+
+          age:
+            userProfile.age,
+
+          gender:
+            userProfile.gender,
+
+          job:
+            userProfile.job
+        },
 
         photoCount:
           files.length,
@@ -489,6 +540,69 @@ app.post(
     }
   }
 );
+
+// =====================================
+// 本人情報JSONの解析
+// =====================================
+
+function parseUserProfile(
+  userProfileText
+) {
+  try {
+    const parsed =
+      JSON.parse(
+        userProfileText || "{}"
+      );
+
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return {
+        birthday: "",
+        age: "",
+        gender: "",
+        job: ""
+      };
+    }
+
+    return {
+      birthday:
+        normalizeProfileValue(
+          parsed.birthday
+        ),
+
+      age:
+        normalizeProfileValue(
+          parsed.age
+        ),
+
+      gender:
+        normalizeProfileValue(
+          parsed.gender
+        ),
+
+      job:
+        normalizeProfileValue(
+          parsed.job
+        )
+    };
+
+  } catch (error) {
+    console.error(
+      "userProfile解析エラー:",
+      error
+    );
+
+    return {
+      birthday: "",
+      age: "",
+      gender: "",
+      job: ""
+    };
+  }
+}
 
 // =====================================
 // 写真情報JSONの解析
@@ -877,7 +991,8 @@ function createAnalysisPrompt({
   category,
   memo,
   fileCount,
-  formattedPhotoContexts
+  formattedPhotoContexts,
+  userProfile
 }) {
   return `
 あなたは「時間の価値の可視化」アプリで使用する分析AIです。
@@ -969,11 +1084,12 @@ function createAnalysisPrompt({
 
 次の観点を考慮してください。
 
-・人とのつながり
 ・感情
-・希少性
-・学び
+・意味や学び
+・人とのつながり
 ・将来への影響
+・希少性
+・記憶として残る濃さ
 
 写真の見た目を説明するだけにしないでください。
 
@@ -986,14 +1102,48 @@ function createAnalysisPrompt({
 次の5項目について、
 何点にしたかと具体的な採点根拠を説明してください。
 
-・relationship
 ・emotion
-・rarity
-・learning
+・meaning
+・relationship
 ・future
+・rarity
 
 各項目について、
 「〇点。理由は～」のように説明してください。
+
+=====================================
+【6：本人情報の利用確認】
+=====================================
+
+本人情報は、
+写真だけでは分からない本人の生活段階や背景を理解するための
+補助情報として使用してください。
+
+ただし、次のルールを守ってください。
+
+・本人情報だけを根拠に点数を上げたり下げたりしない
+・年齢、性別、職業から固定的な人物像を決めつけない
+・写真、メモ、日時、場所、予定との関係がある場合だけ評価に反映する
+・本人情報を利用した場合は、利用項目と反映理由を具体的に説明する
+・本人情報が今回の思い出と関係しない場合は、無理に利用しない
+・利用しなかった場合は、usedUserProfileをfalseにする
+・利用しなかった場合は、usedProfileItemsを「なし」にする
+
+=====================================
+【本人情報】
+=====================================
+
+誕生日：
+${userProfile.birthday || "未設定"}
+
+現在の年齢：
+${userProfile.age || "未設定"}
+
+性別：
+${userProfile.gender || "未設定"}
+
+職業：
+${userProfile.job || "未設定"}
 
 =====================================
 【入力情報】
@@ -1028,6 +1178,52 @@ ${formattedPhotoContexts}
 【25点満点の評価基準】
 =====================================
 
+emotion：
+この思い出に伴う感情や印象の強さ
+
+0点：
+感情を判断できない
+
+1点：
+弱い感情である
+
+2点：
+多少の感情がある
+
+3点：
+明確な感情がある
+
+4点：
+強い感情を伴う
+
+5点：
+非常に強く記憶に残る感情を伴う
+
+-------------------------------------
+
+meaning：
+意味、学び、気付き、成長
+
+0点：
+意味や学びを判断できない
+
+1点：
+意味や学びが小さい
+
+2点：
+多少の意味や学びがある
+
+3点：
+明確な意味や学びがある
+
+4点：
+大きな成長や気付きにつながる
+
+5点：
+人生観や価値観に関わる大きな意味がある
+
+-------------------------------------
+
 relationship：
 家族、友人、仲間などとのつながり
 
@@ -1051,26 +1247,26 @@ relationship：
 
 -------------------------------------
 
-emotion：
-この思い出に伴う感情や印象の強さ
+future：
+将来の考え方、行動、成長、人間関係への影響
 
 0点：
-感情を判断できない
+将来への影響を判断できない
 
 1点：
-弱い感情である
+将来への影響が小さい
 
 2点：
-多少の感情がある
+多少の影響がある
 
 3点：
-明確な感情がある
+今後につながる経験である
 
 4点：
-強い感情を伴う
+将来の選択や成長に大きく影響する
 
 5点：
-非常に強く記憶に残る感情を伴う
+人生の方向性を変えるほどの影響がある
 
 -------------------------------------
 
@@ -1096,69 +1292,23 @@ rarity：
 二度と同じ形では経験できない、
 非常に特別な思い出である
 
--------------------------------------
-
-learning：
-学び、気付き、成長
-
-0点：
-学びや成長を判断できない
-
-1点：
-学びや成長が小さい
-
-2点：
-多少の学びや成長がある
-
-3点：
-明確な学びや成長がある
-
-4点：
-大きな成長や気付きにつながる
-
-5点：
-人生観や価値観に関わる大きな学びがある
-
--------------------------------------
-
-future：
-将来の考え方、行動、成長、人間関係への影響
-
-0点：
-将来への影響を判断できない
-
-1点：
-将来への影響が小さい
-
-2点：
-多少の影響がある
-
-3点：
-今後につながる経験である
-
-4点：
-将来の選択や成長に大きく影響する
-
-5点：
-人生の方向性を変えるほどの影響がある
-
 =====================================
 【合計点】
 =====================================
 
-relationship：
-0～5点
-
 emotion：
 0～5点
 
-rarity：
+meaning：
 0～5点
 
-learning：
+relationship：
 0～5点
 
 future：
+0～5点
+
+rarity：
 0～5点
 
 5項目の合計を、
@@ -1179,6 +1329,10 @@ future：
 ・contextMeaningは付随情報から分かる背景や意味にしてください。
 ・valueReasonは将来残す価値を説明してください。
 ・reasonは点数と採点根拠を説明してください。
+・usedUserProfileは本人情報を実際に評価へ使ったかを示してください。
+・usedProfileItemsは利用した本人情報の項目名を示してください。
+・userProfileReasonは本人情報をどのように評価へ反映したかを説明してください。
+・本人情報を利用していない場合も、userProfileReasonを空文字にしないでください。
 ・各文章を同じ内容にしないでください。
 ・同じ文章を複数項目に書かないでください。
 ・不明な情報を事実として断定しないでください。
@@ -1223,29 +1377,29 @@ function normalizeScores(
   result
 ) {
   return {
-    relationship:
-      normalizeScore(
-        result.relationship
-      ),
-
     emotion:
       normalizeScore(
         result.emotion
       ),
 
-    rarity:
+    meaning:
       normalizeScore(
-        result.rarity
+        result.meaning
       ),
 
-    learning:
+    relationship:
       normalizeScore(
-        result.learning
+        result.relationship
       ),
 
     future:
       normalizeScore(
         result.future
+      ),
+
+    rarity:
+      normalizeScore(
+        result.rarity
       )
   };
 }
@@ -1291,6 +1445,42 @@ function normalizeDescriptions(
 }
 
 // =====================================
+// 本人情報利用結果の補正
+// =====================================
+
+function normalizeProfileUsage(
+  result
+) {
+  const usedUserProfile =
+    result.usedUserProfile === true;
+
+  const usedProfileItems =
+    normalizeText(
+      result.usedProfileItems,
+      usedUserProfile
+        ? "利用項目を取得できませんでした"
+        : "なし"
+    );
+
+  const userProfileReason =
+    normalizeText(
+      result.userProfileReason,
+      usedUserProfile
+        ? "本人情報の反映理由を取得できませんでした。"
+        : "今回の思い出との明確な関係を確認できなかったため、本人情報は評価に利用していません。"
+    );
+
+  return {
+    usedUserProfile,
+    usedProfileItems:
+      usedUserProfile
+        ? usedProfileItems
+        : "なし",
+    userProfileReason
+  };
+}
+
+// =====================================
 // 25点満点の合計点計算
 // =====================================
 
@@ -1298,11 +1488,11 @@ function calculateScore(
   scores
 ) {
   return (
-    scores.relationship +
     scores.emotion +
-    scores.rarity +
-    scores.learning +
-    scores.future
+    scores.meaning +
+    scores.relationship +
+    scores.future +
+    scores.rarity
   );
 }
 
@@ -1379,14 +1569,6 @@ UTCへ変換し直さないでください。
 
 点数：
 ${JSON.stringify(scores, null, 2)}
-
-評価項目は次の5項目です。
-
-・人間関係
-・感情
-・希少性
-・学び
-・将来への影響
 
 5文章は同じ内容にしないでください。
 
@@ -1752,6 +1934,23 @@ function normalizeNullableValue(
 }
 
 // =====================================
+// 本人情報の値を文字列へ補正
+// =====================================
+
+function normalizeProfileValue(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+// =====================================
 // 文字列が存在するか確認
 // =====================================
 
@@ -1771,6 +1970,7 @@ function hasText(
 function logRequestInformation({
   category,
   memo,
+  userProfile,
   files,
   photoContexts
 }) {
@@ -1795,6 +1995,15 @@ function logRequestInformation({
   console.log(
     "メモ:",
     memo
+  );
+
+  console.log(
+    "本人情報:",
+    JSON.stringify(
+      userProfile,
+      null,
+      2
+    )
   );
 
   console.log(
@@ -1913,11 +2122,6 @@ app.listen(
     );
 
     console.log(
-      "評価項目:",
-      "人間関係・感情・希少性・学び・将来への影響"
-    );
-
-    console.log(
       "最大点:",
       "25点"
     );
@@ -1927,4 +2131,3 @@ app.listen(
     );
   }
 );
-````
