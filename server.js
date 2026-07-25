@@ -12,7 +12,7 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-25-profile-compare-v13";
+const SERVER_VERSION = "memory-value-25-profile-v12";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
@@ -307,30 +307,13 @@ app.post(
           photoContexts
         );
 
-      /*
-        同じ写真・メモ・日時・場所・予定を使い、
-        ①プロフィールなし
-        ②プロフィールあり
-        の2条件を同時に評価する。
-      */
-      const withoutProfilePrompt =
+      const prompt =
         createAnalysisPrompt({
           category,
           memo,
           fileCount: files.length,
           formattedPhotoContexts,
-          userProfile,
-          includeUserProfile: false
-        });
-
-      const withProfilePrompt =
-        createAnalysisPrompt({
-          category,
-          memo,
-          fileCount: files.length,
-          formattedPhotoContexts,
-          userProfile,
-          includeUserProfile: true
+          userProfile
         });
 
       console.log(
@@ -338,37 +321,115 @@ app.post(
       );
 
       console.log(
-        "プロフィールなし・ありの2条件でGeminiへ送信中..."
+        "Geminiへ送る写真文脈:"
       );
 
-      const [
-        withoutProfileResult,
-        withProfileResult
-      ] = await Promise.all([
-        evaluateMemoryWithGemini({
-          prompt:
-            withoutProfilePrompt,
-          imageParts,
-          evaluationLabel:
-            "プロフィールなし"
-        }),
+      console.log(
+        formattedPhotoContexts
+      );
 
-        evaluateMemoryWithGemini({
-          prompt:
-            withProfilePrompt,
-          imageParts,
-          evaluationLabel:
-            "プロフィールあり"
-        })
-      ]);
+      console.log(
+        "===================================="
+      );
 
-      const difference =
-        calculateEvaluationDifference({
-          withoutProfile:
-            withoutProfileResult,
-          withProfile:
-            withProfileResult
+      console.log(
+        "Geminiへ送信中..."
+      );
+
+      const response =
+        await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+
+          contents: [
+            {
+              role: "user",
+
+              parts: [
+                {
+                  text: prompt
+                },
+
+                ...imageParts
+              ]
+            }
+          ],
+
+          config: {
+            responseMimeType:
+              "application/json",
+
+            responseSchema:
+              analysisSchema,
+
+            temperature: 0.5
+          }
         });
+
+      const responseText =
+        response.text || "";
+
+      console.log(
+        "Geminiから返答を受信しました"
+      );
+
+      console.log(
+        responseText
+      );
+
+      if (!responseText.trim()) {
+        throw new Error(
+          "Geminiから空の応答が返されました"
+        );
+      }
+
+      const result =
+        parseGeminiResponse(
+          responseText
+        );
+
+      const scores =
+        normalizeScores(result);
+
+      let descriptions =
+        normalizeDescriptions(result);
+
+      const profileUsage =
+        normalizeProfileUsage(result);
+
+      /*
+        各説明文が同じ文章になった場合は、
+        文章部分だけ再生成する。
+      */
+      const duplicateFields =
+        findDuplicateFields(
+          descriptions
+        );
+
+      if (duplicateFields.length > 0) {
+        console.warn(
+          "文章の重複を検出しました:",
+          duplicateFields
+        );
+
+        descriptions =
+          await regenerateDescriptions({
+            category,
+            memo,
+            formattedPhotoContexts,
+            descriptions,
+            scores
+          });
+      }
+
+      /*
+        5項目を各5点満点で評価。
+        合計は最大25点。
+
+        写真枚数は掛けない。
+        何枚選択しても1つの思い出として1回だけ評価する。
+      */
+      const totalScore =
+        calculateScore(scores);
 
       const responseData = {
         status: "ok",
@@ -376,16 +437,46 @@ app.post(
         serverVersion:
           SERVER_VERSION,
 
-        comparisonMode:
-          true,
+        memoryTitle:
+          descriptions.memoryTitle,
 
-        withoutProfile:
-          withoutProfileResult,
+        memorySummary:
+          descriptions.memorySummary,
 
-        withProfile:
-          withProfileResult,
+        contextMeaning:
+          descriptions.contextMeaning,
 
-        difference,
+        valueReason:
+          descriptions.valueReason,
+
+        emotion:
+          scores.emotion,
+
+        meaning:
+          scores.meaning,
+
+        relationship:
+          scores.relationship,
+
+        future:
+          scores.future,
+
+        rarity:
+          scores.rarity,
+
+        totalScore,
+
+        reason:
+          descriptions.reason,
+
+        usedUserProfile:
+          profileUsage.usedUserProfile,
+
+        usedProfileItems:
+          profileUsage.usedProfileItems,
+
+        userProfileReason:
+          profileUsage.userProfileReason,
 
         receivedUserProfile: {
           birthday:
@@ -412,7 +503,7 @@ app.post(
       };
 
       console.log(
-        "アプリへ返す比較データ:"
+        "アプリへ返すデータ:"
       );
 
       console.log(
@@ -901,13 +992,158 @@ function createAnalysisPrompt({
   memo,
   fileCount,
   formattedPhotoContexts,
-  userProfile,
-  includeUserProfile
+  userProfile
 }) {
-  const profileSection =
-    includeUserProfile
-      ? `
-${profileSection}
+  return `
+あなたは「時間の価値の可視化」アプリで使用する分析AIです。
+
+選択された写真は、写真1枚ごとに採点するためのものではありません。
+
+選択された写真全体と付随情報から、
+写真が表している「1つの思い出」を推定してください。
+
+その1つの思い出を、
+5項目・合計25点満点で1回だけ評価してください。
+
+写真枚数を点数に掛けてはいけません。
+
+=====================================
+【1：memoryTitle】
+=====================================
+
+写真全体と付随情報から推定される1つの思い出に、
+短く分かりやすいタイトルを付けてください。
+
+例：
+・友人との京都旅行
+・家族で過ごした誕生日
+・大学生活最後の文化祭
+・アルバイト仲間との食事
+
+分からない情報を事実として断定しないでください。
+
+=====================================
+【2：memorySummary】
+=====================================
+
+選択された写真全体が表している、
+1つの思い出の概要を説明してください。
+
+写真に写っている次の内容を中心にしてください。
+
+・人物
+・物
+・場所
+・行動
+・表情
+・雰囲気
+
+写真ごとの説明を別々に並べるのではなく、
+全体を1つの出来事としてまとめてください。
+
+メモ、日時、場所、予定だけを根拠に、
+写真に写っていない内容を断定しないでください。
+
+=====================================
+【3：contextMeaning】
+=====================================
+
+写真の付随情報を使って、
+この思い出の背景や本人にとっての意味を説明してください。
+
+使用する情報：
+
+・カテゴリ
+・本人のメモ
+・撮影日時
+・撮影場所
+・カレンダー予定
+
+撮影日時がある場合は、
+日付または時間帯に触れてください。
+
+撮影場所がある場合は、
+場所と出来事の関係に触れてください。
+
+関連予定がある場合は、
+予定と写真の関係に触れてください。
+
+本人のメモは、
+思い出の背景として重視してください。
+
+存在しない予定や場所を作ってはいけません。
+
+日本時間をUTCとして読み直してはいけません。
+
+=====================================
+【4：valueReason】
+=====================================
+
+この思い出が本人にとって、
+なぜ将来残す価値のある時間なのかを説明してください。
+
+次の観点を考慮してください。
+
+・感情
+・意味や学び
+・人とのつながり
+・将来への影響
+・希少性
+・記憶として残る濃さ
+
+写真の見た目を説明するだけにしないでください。
+
+日時、場所、予定を並べるだけにしないでください。
+
+=====================================
+【5：reason】
+=====================================
+
+次の5項目について、
+何点にしたかと具体的な採点根拠を説明してください。
+
+・emotion
+・meaning
+・relationship
+・future
+・rarity
+
+各項目について、
+「〇点。理由は～」のように説明してください。
+
+=====================================
+【6：本人情報の利用確認】
+=====================================
+
+本人情報は、
+写真だけでは分からない本人の生活段階や背景を理解するための
+補助情報として使用してください。
+
+ただし、次のルールを守ってください。
+
+・本人情報だけを根拠に点数を上げたり下げたりしない
+・年齢、性別、職業から固定的な人物像を決めつけない
+・写真、メモ、日時、場所、予定との関係がある場合だけ評価に反映する
+・本人情報を利用した場合は、利用項目と反映理由を具体的に説明する
+・本人情報が今回の思い出と関係しない場合は、無理に利用しない
+・利用しなかった場合は、usedUserProfileをfalseにする
+・利用しなかった場合は、usedProfileItemsを「なし」にする
+
+=====================================
+【本人情報】
+=====================================
+
+誕生日：
+${userProfile.birthday || "未設定"}
+
+現在の年齢：
+${userProfile.age || "未設定"}
+
+性別：
+${userProfile.gender || "未設定"}
+
+職業：
+${userProfile.job || "未設定"}
 
 =====================================
 【入力情報】
@@ -1104,168 +1340,6 @@ rarity：
 ・空文字は禁止です。
 ・JSON以外は出力しないでください。
 `;
-}
-
-// =====================================
-// 1条件分のGemini評価
-// =====================================
-
-async function evaluateMemoryWithGemini({
-  prompt,
-  imageParts,
-  evaluationLabel
-}) {
-  const response =
-    await ai.models.generateContent({
-      model:
-        "gemini-2.5-flash",
-
-      contents: [
-        {
-          role: "user",
-
-          parts: [
-            {
-              text: prompt
-            },
-
-            ...imageParts
-          ]
-        }
-      ],
-
-      config: {
-        responseMimeType:
-          "application/json",
-
-        responseSchema:
-          analysisSchema,
-
-        temperature:
-          0.5
-      }
-    });
-
-  const responseText =
-    response.text || "";
-
-  console.log(
-    `${evaluationLabel}のGemini返答:`
-  );
-
-  console.log(
-    responseText
-  );
-
-  if (!responseText.trim()) {
-    throw new Error(
-      `${evaluationLabel}でGeminiから空の応答が返されました`
-    );
-  }
-
-  const result =
-    parseGeminiResponse(
-      responseText
-    );
-
-  const scores =
-    normalizeScores(
-      result
-    );
-
-  const descriptions =
-    normalizeDescriptions(
-      result
-    );
-
-  const profileUsage =
-    normalizeProfileUsage(
-      result
-    );
-
-  return {
-    memoryTitle:
-      descriptions.memoryTitle,
-
-    memorySummary:
-      descriptions.memorySummary,
-
-    contextMeaning:
-      descriptions.contextMeaning,
-
-    valueReason:
-      descriptions.valueReason,
-
-    emotion:
-      scores.emotion,
-
-    meaning:
-      scores.meaning,
-
-    relationship:
-      scores.relationship,
-
-    future:
-      scores.future,
-
-    rarity:
-      scores.rarity,
-
-    totalScore:
-      calculateScore(
-        scores
-      ),
-
-    reason:
-      descriptions.reason,
-
-    usedUserProfile:
-      profileUsage.usedUserProfile,
-
-    usedProfileItems:
-      profileUsage.usedProfileItems,
-
-    userProfileReason:
-      profileUsage.userProfileReason,
-
-    maxScore:
-      25
-  };
-}
-
-// =====================================
-// 2条件の差分計算
-// =====================================
-
-function calculateEvaluationDifference({
-  withoutProfile,
-  withProfile
-}) {
-  return {
-    emotion:
-      withProfile.emotion -
-      withoutProfile.emotion,
-
-    meaning:
-      withProfile.meaning -
-      withoutProfile.meaning,
-
-    relationship:
-      withProfile.relationship -
-      withoutProfile.relationship,
-
-    future:
-      withProfile.future -
-      withoutProfile.future,
-
-    rarity:
-      withProfile.rarity -
-      withoutProfile.rarity,
-
-    totalScore:
-      withProfile.totalScore -
-      withoutProfile.totalScore
-  };
 }
 
 // =====================================
@@ -2055,7 +2129,5 @@ app.listen(
     console.log(
       "================================"
     );
-  }
-);
   }
 );
