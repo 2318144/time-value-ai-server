@@ -1,43 +1,68 @@
-const express = require(“express”); const cors = require(“cors”); const
-multer = require(“multer”); const dotenv = require(“dotenv”); const {
-GoogleGenAI } = require(“@google/genai”);
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const dotenv = require("dotenv");
+const { GoogleGenAI } = require("@google/genai");
 
 dotenv.config();
 
-// ===================================== // 基本設定 //
-=====================================
+// =====================================
+// 基本設定
+// =====================================
 
 const app = express();
 
-const SERVER_VERSION = “memory-value-25-history-learning-v16”; const
-PORT = process.env.PORT || 3000;
+const SERVER_VERSION = "memory-value-25-history-learning-v17-complete";
+const PORT = process.env.PORT || 3000;
 
-const APP_TIME_ZONE = “Asia/Tokyo”;
+const APP_TIME_ZONE = "Asia/Tokyo";
 
-const MAX_PHOTO_COUNT = 10; const MAX_AI_PHOTO_COUNT = 3; const
-MAX_HISTORY_COUNT = 20; const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_PHOTO_COUNT = 10;
+const MAX_AI_PHOTO_COUNT = 3;
+const MAX_HISTORY_COUNT = 20;
+const MAX_HISTORY_PROMPT_COUNT = 20;
+const MAX_HISTORY_TEXT_LENGTH = 600;
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-app.use(cors()); app.use(express.json());
+app.use(cors());
+app.use(express.json());
 
-const upload = multer({ storage: multer.memoryStorage(),
+const upload = multer({
+  storage: multer.memoryStorage(),
 
-limits: { files: MAX_PHOTO_COUNT, fileSize: MAX_FILE_SIZE } });
+  limits: {
+    files: MAX_PHOTO_COUNT,
+    fileSize: MAX_FILE_SIZE
+  }
+});
 
-// ===================================== // Gemini初期化 //
-=====================================
+// =====================================
+// Gemini初期化
+// =====================================
 
-if (!process.env.GEMINI_API_KEY) { console.error(
-“注意：GEMINI_API_KEYが環境変数に設定されていません。” ); }
+if (!process.env.GEMINI_API_KEY) {
+  console.error(
+    "注意：GEMINI_API_KEYが環境変数に設定されていません。"
+  );
+}
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 
-// ===================================== // Geminiの出力形式 //
-=====================================
+// =====================================
+// Geminiの出力形式
+// =====================================
 
-const analysisSchema = { type: “object”,
+const analysisSchema = {
+  type: "object",
 
-properties: { memoryTitle: { type: “string”, description:
-“複数の写真と付随情報から判断した、1つの思い出を表す短いタイトル” },
+  properties: {
+    memoryTitle: {
+      type: "string",
+      description:
+        "複数の写真と付随情報から判断した、1つの思い出を表す短いタイトル"
+    },
 
     memorySummary: {
       type: "string",
@@ -132,28 +157,53 @@ properties: { memoryTitle: { type: “string”, description:
       description:
         "過去の思い出の傾向を今回の評価へどう反映したか。利用していない場合はその理由"
     }
+  },
 
-},
+  required: [
+    "memoryTitle",
+    "memorySummary",
+    "contextMeaning",
+    "valueReason",
+    "emotion",
+    "meaning",
+    "relationship",
+    "future",
+    "rarity",
+    "reason",
+    "usedUserProfile",
+    "usedProfileItems",
+    "userProfileReason",
+    "usedMemoryHistory",
+    "historyReferenceReason"
+  ]
+};
 
-required: [ “memoryTitle”, “memorySummary”, “contextMeaning”,
-“valueReason”, “emotion”, “meaning”, “relationship”, “future”, “rarity”,
-“reason”, “usedUserProfile”, “usedProfileItems”, “userProfileReason”,
-“usedMemoryHistory”, “historyReferenceReason” ] };
+// =====================================
+// 基本ルート
+// =====================================
 
-// ===================================== // 基本ルート //
-=====================================
+app.get("/", (req, res) => {
+  res.send(
+    `Time Value AI Server is running. Version: ${SERVER_VERSION}`
+  );
+});
 
-app.get(“/”, (req, res) => { res.send(
-Time Value AI Server is running. Version: ${SERVER_VERSION} ); });
+app.get("/test", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "server is working",
+    serverVersion: SERVER_VERSION
+  });
+});
 
-app.get(“/test”, (req, res) => { res.json({ status: “ok”, message:
-“server is working”, serverVersion: SERVER_VERSION }); });
+// =====================================
+// Gemini接続確認
+// =====================================
 
-// ===================================== // Gemini接続確認 //
-=====================================
-
-app.get(“/analyze-test”, async (req, res) => { try { const response =
-await ai.models.generateContent({ model: “gemini-2.5-flash”,
+app.get("/analyze-test", async (req, res) => {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
 
       contents: [
         {
@@ -200,21 +250,32 @@ await ai.models.generateContent({ model: “gemini-2.5-flash”,
       geminiResponse: result
     });
 
-} catch (error) { console.error( “Gemini接続確認エラー:”, error );
+  } catch (error) {
+    console.error(
+      "Gemini接続確認エラー:",
+      error
+    );
 
     return res.status(500).json({
       status: "error",
       serverVersion: SERVER_VERSION,
       message: error.message
     });
+  }
+});
 
-} });
+// =====================================
+// 思い出AI評価
+// =====================================
 
-// ===================================== // 思い出AI評価 //
-=====================================
-
-app.post( “/analyze”, upload.array(“photos”), async (req, res) => { try
-{ const memo = String( req.body.memo || “” ).trim();
+app.post(
+  "/analyze",
+  upload.array("photos"),
+  async (req, res) => {
+    try {
+      const memo = String(
+        req.body.memo || ""
+      ).trim();
 
       const category = String(
         req.body.category || ""
@@ -282,6 +343,7 @@ app.post( “/analyze”, upload.array(“photos”), async (req, res) => { try
           fileCount: files.length,
           formattedPhotoContexts,
           userProfile,
+          memoryHistory,
           learnedValueProfile
         });
 
@@ -524,14 +586,21 @@ app.post( “/analyze”, upload.array(“photos”), async (req, res) => { try
         detail: error.message
       });
     }
+  }
+);
 
-} );
+// =====================================
+// 本人情報JSONの解析
+// =====================================
 
-// ===================================== // 本人情報JSONの解析 //
-=====================================
-
-function parseUserProfile( userProfileText ) { try { const parsed =
-JSON.parse( userProfileText || “{}” );
+function parseUserProfile(
+  userProfileText
+) {
+  try {
+    const parsed =
+      JSON.parse(
+        userProfileText || "{}"
+      );
 
     if (
       !parsed ||
@@ -568,7 +637,11 @@ JSON.parse( userProfileText || “{}” );
         )
     };
 
-} catch (error) { console.error( “userProfile解析エラー:”, error );
+  } catch (error) {
+    console.error(
+      "userProfile解析エラー:",
+      error
+    );
 
     return {
       birthday: "",
@@ -576,14 +649,21 @@ JSON.parse( userProfileText || “{}” );
       gender: "",
       job: ""
     };
+  }
+}
 
-} }
+// =====================================
+// 過去の思い出JSONの解析
+// =====================================
 
-// ===================================== // 過去の思い出JSONの解析 //
-=====================================
-
-function parseMemoryHistory( memoryHistoryText ) { try { const parsed =
-JSON.parse( memoryHistoryText || “[]” );
+function parseMemoryHistory(
+  memoryHistoryText
+) {
+  try {
+    const parsed =
+      JSON.parse(
+        memoryHistoryText || "[]"
+      );
 
     if (!Array.isArray(parsed)) {
       return [];
@@ -592,36 +672,75 @@ JSON.parse( memoryHistoryText || “[]” );
     return parsed
       .slice(0, MAX_HISTORY_COUNT)
       .map((memory) => {
+        const hasUserScores =
+          hasAnyDefinedScore([
+            memory.userEmotion,
+            memory.userMeaning,
+            memory.userRelationship,
+            memory.userFuture,
+            memory.userRarity,
+            memory.userScore?.emotion,
+            memory.userScore?.meaning,
+            memory.userScore?.relationship,
+            memory.userScore?.future,
+            memory.userScore?.rarity
+          ]);
+
         const scores = {
           emotion:
             normalizeScore(
-              memory.emotion
+              firstDefinedValue(
+                memory.userEmotion,
+                memory.userScore?.emotion,
+                memory.emotion,
+                memory.aiScore?.emotion
+              )
             ),
 
           meaning:
             normalizeScore(
-              memory.meaning ??
-              memory.learning ??
-              memory.experience
+              firstDefinedValue(
+                memory.userMeaning,
+                memory.userScore?.meaning,
+                memory.meaning,
+                memory.learning,
+                memory.experience,
+                memory.aiScore?.meaning
+              )
             ),
 
           relationship:
             normalizeScore(
-              memory.relationship ??
-              memory.people
+              firstDefinedValue(
+                memory.userRelationship,
+                memory.userScore?.relationship,
+                memory.relationship,
+                memory.people,
+                memory.aiScore?.relationship
+              )
             ),
 
           future:
             normalizeScore(
-              memory.future ??
-              memory.futureImpact ??
-              memory.growth
+              firstDefinedValue(
+                memory.userFuture,
+                memory.userScore?.future,
+                memory.future,
+                memory.futureImpact,
+                memory.growth,
+                memory.aiScore?.future
+              )
             ),
 
           rarity:
             normalizeScore(
-              memory.rarity ??
-              memory.special
+              firstDefinedValue(
+                memory.userRarity,
+                memory.userScore?.rarity,
+                memory.rarity,
+                memory.special,
+                memory.aiScore?.rarity
+              )
             )
         };
 
@@ -641,14 +760,18 @@ JSON.parse( memoryHistoryText || “[]” );
 
           memoryTitle:
             normalizeHistoryText(
-              memory.memoryTitle ??
-              memory.title
+              firstDefinedValue(
+                memory.memoryTitle,
+                memory.title
+              )
             ),
 
           memorySummary:
             normalizeHistoryText(
-              memory.memorySummary ??
-              memory.summary
+              firstDefinedValue(
+                memory.memorySummary,
+                memory.summary
+              )
             ),
 
           contextMeaning:
@@ -660,6 +783,31 @@ JSON.parse( memoryHistoryText || “[]” );
             normalizeHistoryText(
               memory.valueReason
             ),
+
+          primaryCriterion:
+            normalizeHistoryText(
+              memory.primaryCriterion
+            ),
+
+          userPriority:
+            normalizeHistoryText(
+              memory.userPriority
+            ),
+
+          correctionReason:
+            normalizeHistoryText(
+              firstDefinedValue(
+                memory.correctionReason,
+                memory.userCorrectionReason
+              )
+            ),
+
+          scoreSource:
+            hasUserScores
+              ? "user-corrected"
+              : normalizeHistoryText(
+                  memory.scoreSource
+                ) || "ai",
 
           emotion:
             scores.emotion,
@@ -678,31 +826,46 @@ JSON.parse( memoryHistoryText || “[]” );
 
           totalScore:
             normalizeHistoryTotalScore(
-              memory.totalScore,
+              firstDefinedValue(
+                memory.userTotalScore,
+                memory.totalScore
+              ),
               calculatedTotal
             ),
 
           createdAt:
             normalizeHistoryText(
-              memory.createdAt ??
-              memory.date
+              firstDefinedValue(
+                memory.createdAt,
+                memory.date
+              )
             )
         };
       });
 
-} catch (error) { console.error( “memoryHistory解析エラー:”, error );
+  } catch (error) {
+    console.error(
+      "memoryHistory解析エラー:",
+      error
+    );
 
     return [];
+  }
+}
 
-} }
+// =====================================
+// 過去の思い出から利用者の価値傾向を作成
+// =====================================
 
-// ===================================== //
-過去の思い出から利用者の価値傾向を作成 //
-=====================================
-
-function createLearnedValueProfile( memoryHistory ) { if (
-!Array.isArray(memoryHistory) || memoryHistory.length === 0 ) { return {
-historyCount: 0,
+function createLearnedValueProfile(
+  memoryHistory
+) {
+  if (
+    !Array.isArray(memoryHistory) ||
+    memoryHistory.length === 0
+  ) {
+    return {
+      historyCount: 0,
 
       averages: {
         emotion: 0,
@@ -720,22 +883,46 @@ historyCount: 0,
       summary:
         "過去の思い出がないため、価値傾向はまだ形成されていません。"
     };
+  }
 
-}
+  const scoreKeys = [
+    "emotion",
+    "meaning",
+    "relationship",
+    "future",
+    "rarity"
+  ];
 
-const scoreKeys = [ “emotion”, “meaning”, “relationship”, “future”,
-“rarity” ];
+  const criterionLabels = {
+    emotion: "感情",
+    meaning: "意味・学び",
+    relationship: "人間関係",
+    future: "将来への影響",
+    rarity: "希少性"
+  };
 
-const criterionLabels = { emotion: “感情”, meaning: “意味・学び”,
-relationship: “人間関係”, future: “将来への影響”, rarity: “希少性” };
+  const sums = {
+    emotion: 0,
+    meaning: 0,
+    relationship: 0,
+    future: 0,
+    rarity: 0,
+    totalScore: 0
+  };
 
-const sums = { emotion: 0, meaning: 0, relationship: 0, future: 0,
-rarity: 0, totalScore: 0 };
+  const categoryCounts =
+    new Map();
 
-const categoryCounts = new Map();
-
-memoryHistory.forEach( (memory) => { scoreKeys.forEach( (key) => {
-sums[key] += normalizeScore( memory[key] ); } );
+  memoryHistory.forEach(
+    (memory) => {
+      scoreKeys.forEach(
+        (key) => {
+          sums[key] +=
+            normalizeScore(
+              memory[key]
+            );
+        }
+      );
 
       sums.totalScore +=
         normalizeHistoryTotalScore(
@@ -755,11 +942,14 @@ sums[key] += normalizeScore( memory[key] ); } );
         );
       }
     }
+  );
 
-);
-
-const averages = { emotion: roundToOneDecimal( sums.emotion /
-memoryHistory.length ),
+  const averages = {
+    emotion:
+      roundToOneDecimal(
+        sums.emotion /
+        memoryHistory.length
+      ),
 
     meaning:
       roundToOneDecimal(
@@ -790,20 +980,53 @@ memoryHistory.length ),
         sums.totalScore /
         memoryHistory.length
       )
+  };
 
-};
+  const strongestCriteria =
+    scoreKeys
+      .map((key) => ({
+        key,
+        label:
+          criterionLabels[key],
+        average:
+          averages[key]
+      }))
+      .sort(
+        (a, b) =>
+          b.average -
+          a.average
+      )
+      .slice(0, 3);
 
-const strongestCriteria = scoreKeys .map((key) => ({ key, label:
-criterionLabels[key], average: averages[key] })) .sort( (a, b) =>
-b.average - a.average ) .slice(0, 3);
+  const frequentCategories =
+    Array.from(
+      categoryCounts.entries()
+    )
+      .map(
+        ([category, count]) => ({
+          category,
+          count
+        })
+      )
+      .sort(
+        (a, b) =>
+          b.count -
+          a.count
+      )
+      .slice(0, 5);
 
-const frequentCategories = Array.from( categoryCounts.entries() ) .map(
-([category, count]) => ({ category, count }) ) .sort( (a, b) =>
-b.count - a.count ) .slice(0, 5);
-
-const representativeMemories = […memoryHistory] .sort( (a, b) =>
-b.totalScore - a.totalScore ) .slice(0, 3) .map((memory) => ({
-memoryTitle: memory.memoryTitle || “タイトルなし”,
+  const representativeMemories =
+    [...memoryHistory]
+      .sort(
+        (a, b) =>
+          b.totalScore -
+          a.totalScore
+      )
+      .slice(0, 3)
+      .map((memory) => ({
+        memoryTitle:
+          memory.memoryTitle ||
+          "タイトルなし",
 
         category:
           memory.category ||
@@ -819,14 +1042,27 @@ memoryTitle: memory.memoryTitle || “タイトルなし”,
           "説明なし"
       }));
 
-const strongestText = strongestCriteria .map( (item) =>
-${item.label}（平均${item.average}点） ) .join(“、”);
+  const strongestText =
+    strongestCriteria
+      .map(
+        (item) =>
+          `${item.label}（平均${item.average}点）`
+      )
+      .join("、");
 
-const categoryText = frequentCategories.length > 0 ? frequentCategories
-.map( (item) => ${item.category}（${item.count}件） ) .join(“、”) :
-“分類できるカテゴリなし”;
+  const categoryText =
+    frequentCategories.length > 0
+      ? frequentCategories
+          .map(
+            (item) =>
+              `${item.category}（${item.count}件）`
+          )
+          .join("、")
+      : "分類できるカテゴリなし";
 
-return { historyCount: memoryHistory.length,
+  return {
+    historyCount:
+      memoryHistory.length,
 
     averages,
 
@@ -838,52 +1074,235 @@ return { historyCount: memoryHistory.length,
 
     summary:
       `過去${memoryHistory.length}件では、${strongestText}が比較的高く、頻出カテゴリは${categoryText}です。`
+  };
+}
 
-}; }
+// =====================================
+// 学習した価値傾向をプロンプト用文章へ変換
+// =====================================
 
-// ===================================== //
-学習した価値傾向をプロンプト用文章へ変換 //
-=====================================
+function formatLearnedValueProfile(
+  learnedValueProfile
+) {
+  if (
+    !learnedValueProfile ||
+    learnedValueProfile.historyCount === 0
+  ) {
+    return `
+過去の思い出：
+登録なし
 
-function formatLearnedValueProfile( learnedValueProfile ) { if (
-!learnedValueProfile || learnedValueProfile.historyCount === 0 ) {
-return ` 過去の思い出： 登録なし
+今回の評価では、
+過去履歴による個人化を行わないでください。
+`.trim();
+  }
 
-今回の評価では、 過去履歴による個人化を行わないでください。 `.trim(); }
+  const strongestText =
+    learnedValueProfile
+      .strongestCriteria
+      .map(
+        (item) =>
+          `・${item.label}：平均${item.average}点`
+      )
+      .join("\n");
 
-const strongestText = learnedValueProfile .strongestCriteria .map(
-(item) => ・${item.label}：平均${item.average}点 ) .join(“”);
+  const categoriesText =
+    learnedValueProfile
+      .frequentCategories
+      .length > 0
+      ? learnedValueProfile
+          .frequentCategories
+          .map(
+            (item) =>
+              `・${item.category}：${item.count}件`
+          )
+          .join("\n")
+      : "・該当なし";
 
-const categoriesText = learnedValueProfile .frequentCategories .length >
-0 ? learnedValueProfile .frequentCategories .map( (item) =>
-・${item.category}：${item.count}件 ) .join(“”) : “・該当なし”;
+  const memoriesText =
+    learnedValueProfile
+      .representativeMemories
+      .length > 0
+      ? learnedValueProfile
+          .representativeMemories
+          .map(
+            (memory, index) =>
+              `${index + 1}. ${memory.memoryTitle}／${memory.category}／${memory.totalScore}点\n   ${memory.valueReason}`
+          )
+          .join("\n")
+      : "該当なし";
 
-const memoriesText = learnedValueProfile .representativeMemories
-.length > 0 ? learnedValueProfile .representativeMemories .map( (memory,
-index) =>
-${index + 1}. ${memory.memoryTitle}／${memory.category}／${memory.totalScore}点\n   ${memory.valueReason}
-) .join(“”) : “該当なし”;
-
-return ` 履歴件数： ${learnedValueProfile.historyCount}件
+  return `
+履歴件数：
+${learnedValueProfile.historyCount}件
 
 5項目の平均：
-・感情：learnedValueProfile.averages.emotion・意味・学び：{learnedValueProfile.averages.meaning}
-・人間関係：learnedValueProfile.averages.relationship・将来への影響：{learnedValueProfile.averages.future}
-・希少性：learnedValueProfile.averages.rarity・合計：{learnedValueProfile.averages.totalScore}／25
+・感情：${learnedValueProfile.averages.emotion}
+・意味・学び：${learnedValueProfile.averages.meaning}
+・人間関係：${learnedValueProfile.averages.relationship}
+・将来への影響：${learnedValueProfile.averages.future}
+・希少性：${learnedValueProfile.averages.rarity}
+・合計：${learnedValueProfile.averages.totalScore}／25
 
-比較的高い観点： ${strongestText}
+比較的高い観点：
+${strongestText}
 
-頻出カテゴリ： ${categoriesText}
+頻出カテゴリ：
+${categoriesText}
 
-代表的な高価値の思い出： ${memoriesText}
+代表的な高価値の思い出：
+${memoriesText}
 
-傾向の要約： ${learnedValueProfile.summary} `.trim(); }
+傾向の要約：
+${learnedValueProfile.summary}
+`.trim();
+}
 
-// ===================================== // 写真情報JSONの解析 //
-=====================================
 
-function parsePhotoContexts( photoContextsText ) { try { const parsed =
-JSON.parse( photoContextsText || “[]” );
+// =====================================
+// 過去の思い出をプロンプト用文章へ変換
+// =====================================
+
+function formatMemoryHistoryForPrompt(
+  memoryHistory
+) {
+  if (
+    !Array.isArray(memoryHistory) ||
+    memoryHistory.length === 0
+  ) {
+    return `
+過去の思い出：
+登録なし
+`.trim();
+  }
+
+  return memoryHistory
+    .slice(0, MAX_HISTORY_PROMPT_COUNT)
+    .map((memory, index) => {
+      const title =
+        trimPromptText(
+          memory.memoryTitle ||
+          "タイトルなし"
+        );
+
+      const category =
+        trimPromptText(
+          memory.category ||
+          "未設定"
+        );
+
+      const memo =
+        trimPromptText(
+          memory.memo ||
+          "メモなし"
+        );
+
+      const summary =
+        trimPromptText(
+          memory.memorySummary ||
+          "概要なし"
+        );
+
+      const contextMeaning =
+        trimPromptText(
+          memory.contextMeaning ||
+          "背景情報なし"
+        );
+
+      const valueReason =
+        trimPromptText(
+          memory.valueReason ||
+          "価値理由なし"
+        );
+
+      const primaryCriterion =
+        trimPromptText(
+          memory.primaryCriterion ||
+          "未設定"
+        );
+
+      const userPriority =
+        trimPromptText(
+          memory.userPriority ||
+          "未設定"
+        );
+
+      const correctionReason =
+        trimPromptText(
+          memory.correctionReason ||
+          "修正理由なし"
+        );
+
+      const scoreSource =
+        memory.scoreSource === "user-corrected"
+          ? "本人が修正した点数"
+          : "AIが付けた点数";
+
+      const createdAt =
+        trimPromptText(
+          memory.createdAt ||
+          "日時不明"
+        );
+
+      return `
+【過去の思い出${index + 1}】
+
+タイトル：
+${title}
+
+カテゴリ：
+${category}
+
+本人のメモ：
+${memo}
+
+概要：
+${summary}
+
+背景・意味：
+${contextMeaning}
+
+価値の理由：
+${valueReason}
+
+本人が特に重視した観点：
+${primaryCriterion}
+
+本人の優先事項：
+${userPriority}
+
+点数の情報源：
+${scoreSource}
+
+本人による修正理由：
+${correctionReason}
+
+点数：
+・感情：${memory.emotion}点
+・意味・学び：${memory.meaning}点
+・人間関係：${memory.relationship}点
+・将来への影響：${memory.future}点
+・希少性：${memory.rarity}点
+・合計：${memory.totalScore}／25点
+
+登録日時：
+${createdAt}
+`.trim();
+    })
+    .join("\n\n");
+}
+
+// =====================================
+// 写真情報JSONの解析
+// =====================================
+
+function parsePhotoContexts(
+  photoContextsText
+) {
+  try {
+    const parsed = JSON.parse(
+      photoContextsText || "[]"
+    );
 
     if (!Array.isArray(parsed)) {
       return [];
@@ -891,35 +1310,55 @@ JSON.parse( photoContextsText || “[]” );
 
     return parsed;
 
-} catch (error) { console.error( “photoContexts解析エラー:”, error );
+  } catch (error) {
+    console.error(
+      "photoContexts解析エラー:",
+      error
+    );
 
     return [];
+  }
+}
 
-} }
+// =====================================
+// Gemini用画像データ作成
+// =====================================
 
-// ===================================== // Gemini用画像データ作成 //
-=====================================
-
-function createImagePart(file) { return { inlineData: { mimeType:
-file.mimetype || “image/jpeg”,
+function createImagePart(file) {
+  return {
+    inlineData: {
+      mimeType:
+        file.mimetype ||
+        "image/jpeg",
 
       data:
         file.buffer.toString(
           "base64"
         )
     }
+  };
+}
 
-}; }
+// =====================================
+// 写真情報を文章へ変換
+// =====================================
 
-// ===================================== // 写真情報を文章へ変換 //
-=====================================
+function formatPhotoContexts(
+  photoContexts
+) {
+  if (
+    !Array.isArray(photoContexts) ||
+    photoContexts.length === 0
+  ) {
+    return "写真情報はありません。";
+  }
 
-function formatPhotoContexts( photoContexts ) { if (
-!Array.isArray(photoContexts) || photoContexts.length === 0 ) { return
-“写真情報はありません。”; }
-
-return photoContexts .map((photo, index) => { const fileName =
-normalizeNullableValue( photo.fileName );
+  return photoContexts
+    .map((photo, index) => {
+      const fileName =
+        normalizeNullableValue(
+          photo.fileName
+        );
 
       /*
         Monaca側で作成した日本時間表記を優先する。
@@ -952,29 +1391,50 @@ normalizeNullableValue( photo.fileName );
         );
 
       return `
-
 【写真${index + 1}】
 
-ファイル名： ${fileName}
+ファイル名：
+${fileName}
 
-撮影日時： ${takenDate}
+撮影日時：
+${takenDate}
 
-撮影場所： ${location}
+撮影場所：
+${location}
 
-関連予定： ${calendar} `.trim(); }) .join(“”); }
+関連予定：
+${calendar}
+`.trim();
+    })
+    .join("\n\n");
+}
 
-// ===================================== // 撮影日時を日本時間へ変換 //
-=====================================
+// =====================================
+// 撮影日時を日本時間へ変換
+// =====================================
 
-function formatDateValueJST(value) { if (!value) { return
-“取得できません”; }
+function formatDateValueJST(value) {
+  if (!value) {
+    return "取得できません";
+  }
 
-const date = new Date(value);
+  const date =
+    new Date(value);
 
-if ( Number.isNaN( date.getTime() ) ) { return String(value); }
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return String(value);
+  }
 
-const dateText = new Intl.DateTimeFormat( “ja-JP”, { timeZone:
-APP_TIME_ZONE,
+  const dateText =
+    new Intl.DateTimeFormat(
+      "ja-JP",
+      {
+        timeZone:
+          APP_TIME_ZONE,
 
         year:
           "numeric",
@@ -1002,20 +1462,40 @@ APP_TIME_ZONE,
       }
     ).format(date);
 
-const timePeriod = getJapaneseTimePeriod( date );
+  const timePeriod =
+    getJapaneseTimePeriod(
+      date
+    );
 
-return ( ${dateText}（日本時間・${timePeriod}） ); }
+  return (
+    `${dateText}（日本時間・${timePeriod}）`
+  );
+}
 
-// ===================================== // 時間帯を判定 //
-=====================================
+// =====================================
+// 時間帯を判定
+// =====================================
 
-function getJapaneseTimePeriod( dateValue ) { const date = new
-Date(dateValue);
+function getJapaneseTimePeriod(
+  dateValue
+) {
+  const date =
+    new Date(dateValue);
 
-if ( Number.isNaN( date.getTime() ) ) { return “時間帯不明”; }
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return "時間帯不明";
+  }
 
-const hourText = new Intl.DateTimeFormat( “ja-JP”, { timeZone:
-APP_TIME_ZONE,
+  const hourText =
+    new Intl.DateTimeFormat(
+      "ja-JP",
+      {
+        timeZone:
+          APP_TIME_ZONE,
 
         hour:
           "2-digit",
@@ -1025,50 +1505,122 @@ APP_TIME_ZONE,
       }
     ).format(date);
 
-const hour = Number( hourText.replace( //g, “” ) );
+  const hour = Number(
+    hourText.replace(
+      /\D/g,
+      ""
+    )
+  );
 
-if ( hour >= 5 && hour < 10 ) { return “朝”; }
+  if (
+    hour >= 5 &&
+    hour < 10
+  ) {
+    return "朝";
+  }
 
-if ( hour >= 10 && hour < 15 ) { return “昼”; }
+  if (
+    hour >= 10 &&
+    hour < 15
+  ) {
+    return "昼";
+  }
 
-if ( hour >= 15 && hour < 18 ) { return “午後”; }
+  if (
+    hour >= 15 &&
+    hour < 18
+  ) {
+    return "午後";
+  }
 
-if ( hour >= 18 && hour < 21 ) { return “夕方”; }
+  if (
+    hour >= 18 &&
+    hour < 21
+  ) {
+    return "夕方";
+  }
 
-return “夜”; }
+  return "夜";
+}
 
-// ===================================== // 位置情報を文章化 //
-=====================================
+// =====================================
+// 位置情報を文章化
+// =====================================
 
-function createLocationText( latitude, longitude ) { const hasLatitude =
-latitude !== null && latitude !== undefined && latitude !== ““;
+function createLocationText(
+  latitude,
+  longitude
+) {
+  const hasLatitude =
+    latitude !== null &&
+    latitude !== undefined &&
+    latitude !== "";
 
-const hasLongitude = longitude !== null && longitude !== undefined &&
-longitude !== ““;
+  const hasLongitude =
+    longitude !== null &&
+    longitude !== undefined &&
+    longitude !== "";
 
-if ( !hasLatitude || !hasLongitude ) { return “取得できません”; }
+  if (
+    !hasLatitude ||
+    !hasLongitude
+  ) {
+    return "取得できません";
+  }
 
-return ( “位置情報が記録されています。” ); }
+  return (
+    "位置情報が記録されています。"
+  );
+}
 
-// ===================================== // カレンダー予定を文章化 //
-=====================================
+// =====================================
+// カレンダー予定を文章化
+// =====================================
 
-function createCalendarEventText( relatedEvent ) { if ( !relatedEvent ||
-typeof relatedEvent !== “object” ) { return “関連予定なし”; }
+function createCalendarEventText(
+  relatedEvent
+) {
+  if (
+    !relatedEvent ||
+    typeof relatedEvent !== "object"
+  ) {
+    return "関連予定なし";
+  }
 
-const title = hasText( relatedEvent.summary ) ? String(
-relatedEvent.summary ).trim() : “タイトルなし”;
+  const title =
+    hasText(
+      relatedEvent.summary
+    )
+      ? String(
+          relatedEvent.summary
+        ).trim()
+      : "タイトルなし";
 
-const start = relatedEvent.start?.dateTime || relatedEvent.start?.date
-|| null;
+  const start =
+    relatedEvent.start?.dateTime ||
+    relatedEvent.start?.date ||
+    null;
 
-const end = relatedEvent.end?.dateTime || relatedEvent.end?.date ||
-null;
+  const end =
+    relatedEvent.end?.dateTime ||
+    relatedEvent.end?.date ||
+    null;
 
-if ( relatedEvent.start?.date && relatedEvent.end?.date ) { return (
-${title}（終日予定） ); }
+  if (
+    relatedEvent.start?.date &&
+    relatedEvent.end?.date
+  ) {
+    return (
+      `${title}（終日予定）`
+    );
+  }
 
-if ( start && end ) { const startText = formatTimeJST(start);
+  if (
+    start &&
+    end
+  ) {
+    const startText =
+      formatTimeJST(start);
 
     const endText =
       formatTimeJST(end);
@@ -1076,21 +1628,36 @@ if ( start && end ) { const startText = formatTimeJST(start);
     return (
       `${title}（${startText}～${endText}・日本時間）`
     );
+  }
 
+  return title;
 }
 
-return title; }
+// =====================================
+// カレンダー時刻を日本時間へ変換
+// =====================================
 
-// ===================================== //
-カレンダー時刻を日本時間へ変換 // =====================================
+function formatTimeJST(value) {
+  if (!value) {
+    return "時刻不明";
+  }
 
-function formatTimeJST(value) { if (!value) { return “時刻不明”; }
+  const date =
+    new Date(value);
 
-const date = new Date(value);
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return String(value);
+  }
 
-if ( Number.isNaN( date.getTime() ) ) { return String(value); }
-
-return new Intl.DateTimeFormat( “ja-JP”, { timeZone: APP_TIME_ZONE,
+  return new Intl.DateTimeFormat(
+    "ja-JP",
+    {
+      timeZone:
+        APP_TIME_ZONE,
 
       hour:
         "2-digit",
@@ -1101,47 +1668,75 @@ return new Intl.DateTimeFormat( “ja-JP”, { timeZone: APP_TIME_ZONE,
       hour12:
         false
     }
+  ).format(date);
+}
 
-).format(date); }
+// =====================================
+// AIプロンプト生成
+// =====================================
 
-// ===================================== // AIプロンプト生成 //
-=====================================
+function createAnalysisPrompt({
+  category,
+  memo,
+  fileCount,
+  formattedPhotoContexts,
+  userProfile,
+  memoryHistory,
+  learnedValueProfile
+}) {
+  const formattedMemoryHistory =
+    formatMemoryHistoryForPrompt(
+      memoryHistory
+    );
 
-function createAnalysisPrompt({ category, memo, fileCount,
-formattedPhotoContexts, userProfile, learnedValueProfile }) { const
-formattedLearnedProfile = formatLearnedValueProfile( learnedValueProfile
-);
+  const formattedLearnedProfile =
+    formatLearnedValueProfile(
+      learnedValueProfile
+    );
 
-return ` あなたは「時間の価値の可視化」アプリで使用する分析AIです。
+  return `
+あなたは「時間の価値の可視化」アプリで使用する分析AIです。
 
 選択された写真は、写真1枚ごとに採点するためのものではありません。
 
 選択された写真全体と付随情報から、
 写真が表している「1つの思い出」を推定してください。
 
-その1つの思い出を、 5項目・合計25点満点で1回だけ評価してください。
+その1つの思い出を、
+5項目・合計25点満点で1回だけ評価してください。
 
 写真枚数を点数に掛けてはいけません。
 
-===================================== 【1：memoryTitle】
+=====================================
+【1：memoryTitle】
 =====================================
 
 写真全体と付随情報から推定される1つの思い出に、
 短く分かりやすいタイトルを付けてください。
 
-例： ・友人との京都旅行 ・家族で過ごした誕生日 ・大学生活最後の文化祭
+例：
+・友人との京都旅行
+・家族で過ごした誕生日
+・大学生活最後の文化祭
 ・アルバイト仲間との食事
 
 分からない情報を事実として断定しないでください。
 
-===================================== 【2：memorySummary】
+=====================================
+【2：memorySummary】
 =====================================
 
-選択された写真全体が表している、 1つの思い出の概要を説明してください。
+選択された写真全体が表している、
+1つの思い出の概要を説明してください。
 
 写真に写っている次の内容を中心にしてください。
 
-・人物 ・物 ・場所 ・行動 ・表情 ・雰囲気
+・人物
+・物
+・場所
+・行動
+・表情
+・雰囲気
 
 写真ごとの説明を別々に並べるのではなく、
 全体を1つの出来事としてまとめてください。
@@ -1149,7 +1744,8 @@ return ` あなたは「時間の価値の可視化」アプリで使用する�
 メモ、日時、場所、予定だけを根拠に、
 写真に写っていない内容を断定しないでください。
 
-===================================== 【3：contextMeaning】
+=====================================
+【3：contextMeaning】
 =====================================
 
 写真の付随情報を使って、
@@ -1157,21 +1753,30 @@ return ` あなたは「時間の価値の可視化」アプリで使用する�
 
 使用する情報：
 
-・カテゴリ ・本人のメモ ・撮影日時 ・撮影場所 ・カレンダー予定
+・カテゴリ
+・本人のメモ
+・撮影日時
+・撮影場所
+・カレンダー予定
 
-撮影日時がある場合は、 日付または時間帯に触れてください。
+撮影日時がある場合は、
+日付または時間帯に触れてください。
 
-撮影場所がある場合は、 場所と出来事の関係に触れてください。
+撮影場所がある場合は、
+場所と出来事の関係に触れてください。
 
-関連予定がある場合は、 予定と写真の関係に触れてください。
+関連予定がある場合は、
+予定と写真の関係に触れてください。
 
-本人のメモは、 思い出の背景として重視してください。
+本人のメモは、
+思い出の背景として重視してください。
 
 存在しない予定や場所を作ってはいけません。
 
 日本時間をUTCとして読み直してはいけません。
 
-===================================== 【4：valueReason】
+=====================================
+【4：valueReason】
 =====================================
 
 この思い出が本人にとって、
@@ -1179,26 +1784,39 @@ return ` あなたは「時間の価値の可視化」アプリで使用する�
 
 次の観点を考慮してください。
 
-・感情 ・意味や学び ・人とのつながり ・将来への影響 ・希少性
+・感情
+・意味や学び
+・人とのつながり
+・将来への影響
+・希少性
 ・記憶として残る濃さ
 
 写真の見た目を説明するだけにしないでください。
 
 日時、場所、予定を並べるだけにしないでください。
 
-===================================== 【5：reason】
+=====================================
+【5：reason】
 =====================================
 
-次の5項目について、 何点にしたかと具体的な採点根拠を説明してください。
+次の5項目について、
+何点にしたかと具体的な採点根拠を説明してください。
 
-・emotion ・meaning ・relationship ・future ・rarity
+・emotion
+・meaning
+・relationship
+・future
+・rarity
 
-各項目について、 「〇点。理由は～」のように説明してください。
+各項目について、
+「〇点。理由は～」のように説明してください。
 
-===================================== 【6：本人情報の利用確認】
+=====================================
+【6：本人情報の利用確認】
 =====================================
 
-本人情報は、 写真だけでは分からない本人の生活段階や背景を理解するための
+本人情報は、
+写真だけでは分からない本人の生活段階や背景を理解するための
 補助情報として使用してください。
 
 ただし、次のルールを守ってください。
@@ -1211,161 +1829,294 @@ return ` あなたは「時間の価値の可視化」アプリで使用する�
 ・利用しなかった場合は、usedUserProfileをfalseにする
 ・利用しなかった場合は、usedProfileItemsを「なし」にする
 
-===================================== 【本人情報】
+=====================================
+【本人情報】
 =====================================
 
-誕生日： ${userProfile.birthday || “未設定”}
+誕生日：
+${userProfile.birthday || "未設定"}
 
-現在の年齢： ${userProfile.age || “未設定”}
+現在の年齢：
+${userProfile.age || "未設定"}
 
-性別： ${userProfile.gender || “未設定”}
+性別：
+${userProfile.gender || "未設定"}
 
-職業： ${userProfile.job || “未設定”}
+職業：
+${userProfile.job || "未設定"}
 
 =====================================
-【7：過去の思い出から学習した価値傾向】
+【7：過去の経験・価値観】
 =====================================
 
-次の情報は、 この利用者が過去に登録した思い出の評価結果を
-統計的にまとめたものです。
+次の情報は、
+この利用者が過去に登録した思い出です。
+
+これらは単なる平均値ではなく、
+この利用者がどのような時間に価値を感じやすいかを理解するための
+個人適応用の参考情報です。
+
+-------------------------------------
+【過去の思い出一覧】
+-------------------------------------
+
+${formattedMemoryHistory}
+
+-------------------------------------
+【過去の思い出から算出した価値傾向】
+-------------------------------------
 
 ${formattedLearnedProfile}
 
-過去履歴は、 今回の思い出と関連する場合だけ参考にしてください。
+過去の思い出は、
+今回の思い出と関連がある場合だけ参考にしてください。
+
+今回との関連として確認する観点：
+
+・同じ人物または人間関係
+・同じ場所
+・同じカテゴリ
+・似た出来事
+・似た感情
+・似た意味や学び
+・似た将来への影響
+・本人が重視した観点
 
 次のルールを守ってください。
 
+・今回の写真と本人のメモを最優先にする
 ・過去の平均点を今回の点数へそのままコピーしない
-・過去に高かった観点だからという理由だけで点数を上げない
-・今回の写真、メモ、日時、場所、予定を主な根拠にする
-・過去傾向は、同じカテゴリや似た意味を持つ場合の補助根拠とする
-・履歴が少ない場合は強い傾向として断定しない
+・過去に高かった観点という理由だけで点数を上げない
+・関連する具体的な過去の思い出がある場合だけ利用する
+・本人が修正した点数は、AIだけで付けた点数より重要な証拠として扱う
+・本人の修正理由がある場合は、その価値判断を優先して参考にする
+・履歴が少ない場合は、強い価値傾向として断定しない
 ・今回と関係しない過去の思い出は利用しない
-・利用した場合はusedMemoryHistoryをtrueにする
-・利用しなかった場合はusedMemoryHistoryをfalseにする
-・historyReferenceReasonには、利用方法または利用しなかった理由を書く
 
-===================================== 【入力情報】
+過去履歴を利用した場合：
+
+・usedMemoryHistoryをtrueにする
+・historyReferenceReasonに、参考にした過去の思い出のタイトルを書く
+・今回との共通点を書く
+・点数または説明へどのように反映したかを書く
+
+過去履歴を利用しなかった場合：
+
+・usedMemoryHistoryをfalseにする
+・historyReferenceReasonに
+「今回の思い出と関連する過去の経験が無かったため利用しませんでした。」
+と記述する
+
+=====================================
+【入力情報】
 =====================================
 
-カテゴリ： ${category || “未設定”}
+カテゴリ：
+${category || "未設定"}
 
-本人のメモ： ${memo || “メモなし”}
+本人のメモ：
+${memo || "メモなし"}
 
-思い出の判断に使用する写真枚数： ${fileCount}枚
+思い出の判断に使用する写真枚数：
+${fileCount}枚
 
 写真の付随情報：
 
 ${formattedPhotoContexts}
 
-===================================== 【日時についての重要事項】
+=====================================
+【日時についての重要事項】
 =====================================
 
 ・撮影日時と予定日時は、すべて日本時間です。
 ・UTCへ変換し直さないでください。
-・表示されている日時をそのまま解釈してください。 ・15時台は午後です。
-・18時台は夕方です。 ・21時以降は夜です。
+・表示されている日時をそのまま解釈してください。
+・15時台は午後です。
+・18時台は夕方です。
+・21時以降は夜です。
 ・日本時間と書かれた日時を最優先してください。
 
-===================================== 【25点満点の評価基準】
+=====================================
+【評価根拠の優先順位】
 =====================================
 
-emotion： この思い出に伴う感情や印象の強さ
+次の順番で評価根拠を重視してください。
 
-0点： 感情を判断できない
+1. 今回の写真に写っている内容
+2. 今回の本人のメモ
+3. 撮影日時
+4. 撮影場所
+5. カレンダー予定
+6. 関連する過去の思い出
+7. 本人情報
 
-1点： 弱い感情である
+過去の思い出や本人情報を、
+今回の写真やメモより優先してはいけません。
 
-2点： 多少の感情がある
-
-3点： 明確な感情がある
-
-4点： 強い感情を伴う
-
-5点： 非常に強く記憶に残る感情を伴う
-
-------------------------------------------------------------------------
-
-meaning： 意味、学び、気付き、成長
-
-0点： 意味や学びを判断できない
-
-1点： 意味や学びが小さい
-
-2点： 多少の意味や学びがある
-
-3点： 明確な意味や学びがある
-
-4点： 大きな成長や気付きにつながる
-
-5点： 人生観や価値観に関わる大きな意味がある
-
-------------------------------------------------------------------------
-
-relationship： 家族、友人、仲間などとのつながり
-
-0点： 人との関係を判断できない
-
-1点： 人との関わりが弱い
-
-2点： 一定の関わりがある
-
-3点： 交流や共有体験がある
-
-4点： 関係を深める重要な体験である
-
-5点： 非常に強い絆や重要な関係性を表す
-
-------------------------------------------------------------------------
-
-future： 将来の考え方、行動、成長、人間関係への影響
-
-0点： 将来への影響を判断できない
-
-1点： 将来への影響が小さい
-
-2点： 多少の影響がある
-
-3点： 今後につながる経験である
-
-4点： 将来の選択や成長に大きく影響する
-
-5点： 人生の方向性を変えるほどの影響がある
-
-------------------------------------------------------------------------
-
-rarity： 記念性、希少性、特別性、記憶として残る濃さ
-
-0点： 特別性を判断できない
-
-1点： 日常的で記憶性が低い
-
-2点： やや印象に残る
-
-3点： 特別な要素がある
-
-4点： 記念性や希少性が高い
-
-5点： 二度と同じ形では経験できない、 非常に特別な思い出である
-
-===================================== 【合計点】
+=====================================
+【時間の価値という観点】
 =====================================
 
-emotion： 0～5点
+この研究で扱う時間の価値は、
+単なる楽しさやイベントの規模だけではありません。
 
-meaning： 0～5点
+次の観点を総合的に判断してください。
 
-relationship： 0～5点
+・本人の人生の中で意味がある時間だったか
+・将来振り返ったときにも価値が残るか
+・人との関係を築いた、または深めた時間か
+・学び、気付き、成長につながった時間か
+・将来の考え方や行動へ影響する時間か
+・その人らしさを表す経験か
+・同じ形では繰り返せない特別な時間か
 
-future： 0～5点
+見た目が派手な出来事を自動的に高く評価せず、
+本人にとってどれだけ意味のある時間だったかを重視してください。
 
-rarity： 0～5点
+=====================================
+【25点満点の評価基準】
+=====================================
 
-5項目の合計を、 1つの思い出の価値とします。
+emotion：
+この思い出に伴う感情や印象の強さ
+
+0点：
+感情を判断できない
+
+1点：
+弱い感情である
+
+2点：
+多少の感情がある
+
+3点：
+明確な感情がある
+
+4点：
+強い感情を伴う
+
+5点：
+非常に強く記憶に残る感情を伴う
+
+-------------------------------------
+
+meaning：
+意味、学び、気付き、成長
+
+0点：
+意味や学びを判断できない
+
+1点：
+意味や学びが小さい
+
+2点：
+多少の意味や学びがある
+
+3点：
+明確な意味や学びがある
+
+4点：
+大きな成長や気付きにつながる
+
+5点：
+人生観や価値観に関わる大きな意味がある
+
+-------------------------------------
+
+relationship：
+家族、友人、仲間などとのつながり
+
+0点：
+人との関係を判断できない
+
+1点：
+人との関わりが弱い
+
+2点：
+一定の関わりがある
+
+3点：
+交流や共有体験がある
+
+4点：
+関係を深める重要な体験である
+
+5点：
+非常に強い絆や重要な関係性を表す
+
+-------------------------------------
+
+future：
+将来の考え方、行動、成長、人間関係への影響
+
+0点：
+将来への影響を判断できない
+
+1点：
+将来への影響が小さい
+
+2点：
+多少の影響がある
+
+3点：
+今後につながる経験である
+
+4点：
+将来の選択や成長に大きく影響する
+
+5点：
+人生の方向性を変えるほどの影響がある
+
+-------------------------------------
+
+rarity：
+記念性、希少性、特別性、記憶として残る濃さ
+
+0点：
+特別性を判断できない
+
+1点：
+日常的で記憶性が低い
+
+2点：
+やや印象に残る
+
+3点：
+特別な要素がある
+
+4点：
+記念性や希少性が高い
+
+5点：
+二度と同じ形では経験できない、
+非常に特別な思い出である
+
+=====================================
+【合計点】
+=====================================
+
+emotion：
+0～5点
+
+meaning：
+0～5点
+
+relationship：
+0～5点
+
+future：
+0～5点
+
+rarity：
+0～5点
+
+5項目の合計を、
+1つの思い出の価値とします。
 
 合計は0点から25点です。
 
-===================================== 【重要な制約】
+=====================================
+【重要な制約】
 =====================================
 
 ・評価対象は写真ではなく、写真から推定した1つの思い出です。
@@ -1387,29 +2138,51 @@ rarity： 0～5点
 ・各文章を同じ内容にしないでください。
 ・同じ文章を複数項目に書かないでください。
 ・不明な情報を事実として断定しないでください。
-・各文章は1文から3文程度にしてください。 ・空文字は禁止です。
-・JSON以外は出力しないでください。 `; }
+・各文章は1文から3文程度にしてください。
+・空文字は禁止です。
+・JSON以外は出力しないでください。
+`;
+}
 
-// ===================================== // Gemini応答解析 //
-=====================================
+// =====================================
+// Gemini応答解析
+// =====================================
 
-function parseGeminiResponse( responseText ) { try { return JSON.parse(
-cleanJsonText( responseText ) );
+function parseGeminiResponse(
+  responseText
+) {
+  try {
+    return JSON.parse(
+      cleanJsonText(
+        responseText
+      )
+    );
 
-} catch (error) { console.error( “JSON解析対象:”, responseText );
+  } catch (error) {
+    console.error(
+      "JSON解析対象:",
+      responseText
+    );
 
     throw new Error(
       "Geminiの応答をJSONとして解析できませんでした：" +
       error.message
     );
+  }
+}
 
-} }
+// =====================================
+// 点数補正
+// =====================================
 
-// ===================================== // 点数補正 //
-=====================================
-
-function normalizeScores( result ) { return { emotion: normalizeScore(
-result.emotion ),
+function normalizeScores(
+  result
+) {
+  return {
+    emotion:
+      normalizeScore(
+        result.emotion
+      ),
 
     meaning:
       normalizeScore(
@@ -1430,14 +2203,22 @@ result.emotion ),
       normalizeScore(
         result.rarity
       )
+  };
+}
 
-}; }
+// =====================================
+// 文章補正
+// =====================================
 
-// ===================================== // 文章補正 //
-=====================================
-
-function normalizeDescriptions( result ) { return { memoryTitle:
-normalizeText( result.memoryTitle, “名称を付けられない思い出” ),
+function normalizeDescriptions(
+  result
+) {
+  return {
+    memoryTitle:
+      normalizeText(
+        result.memoryTitle,
+        "名称を付けられない思い出"
+      ),
 
     memorySummary:
       normalizeText(
@@ -1462,38 +2243,64 @@ normalizeText( result.memoryTitle, “名称を付けられない思い出” ),
         result.reason,
         "各項目の点数評価理由を取得できませんでした。"
       )
+  };
+}
 
-}; }
+// =====================================
+// 本人情報利用結果の補正
+// =====================================
 
-// ===================================== // 本人情報利用結果の補正 //
-=====================================
+function normalizeProfileUsage(
+  result
+) {
+  const usedUserProfile =
+    result.usedUserProfile === true;
 
-function normalizeProfileUsage( result ) { const usedUserProfile =
-result.usedUserProfile === true;
+  const usedProfileItems =
+    normalizeText(
+      result.usedProfileItems,
+      usedUserProfile
+        ? "利用項目を取得できませんでした"
+        : "なし"
+    );
 
-const usedProfileItems = normalizeText( result.usedProfileItems,
-usedUserProfile ? “利用項目を取得できませんでした” : “なし” );
+  const userProfileReason =
+    normalizeText(
+      result.userProfileReason,
+      usedUserProfile
+        ? "本人情報の反映理由を取得できませんでした。"
+        : "今回の思い出との明確な関係を確認できなかったため、本人情報は評価に利用していません。"
+    );
 
-const userProfileReason = normalizeText( result.userProfileReason,
-usedUserProfile ? “本人情報の反映理由を取得できませんでした。” :
-“今回の思い出との明確な関係を確認できなかったため、本人情報は評価に利用していません。”
-);
+  return {
+    usedUserProfile,
+    usedProfileItems:
+      usedUserProfile
+        ? usedProfileItems
+        : "なし",
+    userProfileReason
+  };
+}
 
-return { usedUserProfile, usedProfileItems: usedUserProfile ?
-usedProfileItems : “なし”, userProfileReason }; }
+// =====================================
+// 過去履歴利用結果の補正
+// =====================================
 
-// ===================================== // 過去履歴利用結果の補正 //
-=====================================
+function normalizeHistoryUsage(
+  result,
+  learnedValueProfile
+) {
+  const hasHistory =
+    learnedValueProfile &&
+    learnedValueProfile.historyCount > 0;
 
-function normalizeHistoryUsage( result, learnedValueProfile ) { const
-hasHistory = learnedValueProfile && learnedValueProfile.historyCount >
-0;
+  const usedMemoryHistory =
+    hasHistory &&
+    result.usedMemoryHistory === true;
 
-const usedMemoryHistory = hasHistory && result.usedMemoryHistory ===
-true;
-
-const historyReferenceReason = normalizeText(
-result.historyReferenceReason,
+  const historyReferenceReason =
+    normalizeText(
+      result.historyReferenceReason,
 
       hasHistory
         ? (
@@ -1504,69 +2311,110 @@ result.historyReferenceReason,
         : "過去の思い出が登録されていないため、履歴による個人化は行っていません。"
     );
 
-return { usedMemoryHistory, historyReferenceReason }; }
-
-// ===================================== // 25点満点の合計点計算 //
-=====================================
-
-function calculateScore( scores ) { return ( scores.emotion +
-scores.meaning + scores.relationship + scores.future + scores.rarity );
+  return {
+    usedMemoryHistory,
+    historyReferenceReason
+  };
 }
 
-// ===================================== // 説明文が重複した場合の再生成
+// =====================================
+// 25点満点の合計点計算
 // =====================================
 
-async function regenerateDescriptions({ category, memo,
-formattedPhotoContexts, descriptions, scores }) { const prompt = `
-以下の5文章には、 内容の重複または役割の混在があります。
+function calculateScore(
+  scores
+) {
+  return (
+    scores.emotion +
+    scores.meaning +
+    scores.relationship +
+    scores.future +
+    scores.rarity
+  );
+}
 
-評価対象は写真そのものではなく、 写真全体から推定された1つの思い出です。
+// =====================================
+// 説明文が重複した場合の再生成
+// =====================================
+
+async function regenerateDescriptions({
+  category,
+  memo,
+  formattedPhotoContexts,
+  descriptions,
+  scores
+}) {
+  const prompt = `
+以下の5文章には、
+内容の重複または役割の混在があります。
+
+評価対象は写真そのものではなく、
+写真全体から推定された1つの思い出です。
 
 それぞれ異なる役割の文章として書き直してください。
 
-memoryTitle： 1つの思い出を表す短いタイトルを書く。
+memoryTitle：
+1つの思い出を表す短いタイトルを書く。
 
-memorySummary： 写真全体から分かる1つの思い出の概要を書く。
+memorySummary：
+写真全体から分かる1つの思い出の概要を書く。
 
-contextMeaning： カテゴリ、メモ、日本時間の撮影日時、
+contextMeaning：
+カテゴリ、メモ、日本時間の撮影日時、
 撮影場所、関連予定から分かる背景や意味を書く。
 
-valueReason： この思い出を将来残す価値を書く。
+valueReason：
+この思い出を将来残す価値を書く。
 
-reason： 5項目の点数と採点根拠だけを書く。
+reason：
+5項目の点数と採点根拠だけを書く。
 
-===================================== 【現在の文章】
+=====================================
+【現在の文章】
 =====================================
 
-memoryTitle： ${descriptions.memoryTitle}
+memoryTitle：
+${descriptions.memoryTitle}
 
-memorySummary： ${descriptions.memorySummary}
+memorySummary：
+${descriptions.memorySummary}
 
-contextMeaning： ${descriptions.contextMeaning}
+contextMeaning：
+${descriptions.contextMeaning}
 
-valueReason： ${descriptions.valueReason}
+valueReason：
+${descriptions.valueReason}
 
-reason： ${descriptions.reason}
+reason：
+${descriptions.reason}
 
-===================================== 【入力情報】
+=====================================
+【入力情報】
 =====================================
 
-カテゴリ： ${category || “未設定”}
+カテゴリ：
+${category || "未設定"}
 
-メモ： ${memo || “メモなし”}
+メモ：
+${memo || "メモなし"}
 
-写真情報： ${formattedPhotoContexts}
+写真情報：
+${formattedPhotoContexts}
 
-日時はすべて日本時間です。 UTCへ変換し直さないでください。
+日時はすべて日本時間です。
+UTCへ変換し直さないでください。
 
-点数： ${JSON.stringify(scores, null, 2)}
+点数：
+${JSON.stringify(scores, null, 2)}
 
 5文章は同じ内容にしないでください。
 
-JSON以外は出力しないでください。 `;
+JSON以外は出力しないでください。
+`;
 
-const response = await ai.models.generateContent({ model:
-“gemini-2.5-flash”,
+  const response =
+    await ai.models.generateContent({
+      model: "gemini-2.5-flash",
 
       contents: [
         {
@@ -1632,12 +2480,22 @@ const response = await ai.models.generateContent({ model:
       }
     });
 
-const responseText = response.text || “{}”;
+  const responseText =
+    response.text || "{}";
 
-const regenerated = JSON.parse( cleanJsonText( responseText ) );
+  const regenerated =
+    JSON.parse(
+      cleanJsonText(
+        responseText
+      )
+    );
 
-return { memoryTitle: normalizeText( regenerated.memoryTitle,
-descriptions.memoryTitle ),
+  return {
+    memoryTitle:
+      normalizeText(
+        regenerated.memoryTitle,
+        descriptions.memoryTitle
+      ),
 
     memorySummary:
       normalizeText(
@@ -1662,14 +2520,21 @@ descriptions.memoryTitle ),
         regenerated.reason,
         descriptions.reason
       )
+  };
+}
 
-}; }
+// =====================================
+// 説明文の重複確認
+// =====================================
 
-// ===================================== // 説明文の重複確認 //
-=====================================
-
-function findDuplicateFields( descriptions ) { const entries = [ [
-“memoryTitle”, descriptions.memoryTitle ],
+function findDuplicateFields(
+  descriptions
+) {
+  const entries = [
+    [
+      "memoryTitle",
+      descriptions.memoryTitle
+    ],
 
     [
       "memorySummary",
@@ -1690,13 +2555,24 @@ function findDuplicateFields( descriptions ) { const entries = [ [
       "reason",
       descriptions.reason
     ]
+  ];
 
-];
+  const duplicates = [];
 
-const duplicates = [];
-
-for ( let i = 0; i < entries.length; i++ ) { for ( let j = i + 1; j <
-entries.length; j++ ) { const [ nameA, textA ] = entries[i];
+  for (
+    let i = 0;
+    i < entries.length;
+    i++
+  ) {
+    for (
+      let j = i + 1;
+      j < entries.length;
+      j++
+    ) {
+      const [
+        nameA,
+        textA
+      ] = entries[i];
 
       const [
         nameB,
@@ -1714,153 +2590,446 @@ entries.length; j++ ) { const [ nameA, textA ] = entries[i];
         );
       }
     }
+  }
 
+  return duplicates;
 }
 
-return duplicates; }
-
-// ===================================== // 文章類似判定 //
-=====================================
-
-function areTextsSimilar( textA, textB ) { const a =
-normalizeForComparison( textA );
-
-const b = normalizeForComparison( textB );
-
-if (!a || !b) { return false; }
-
-if (a === b) { return true; }
-
-if ( a.includes(b) || b.includes(a) ) { return true; }
-
-const shorter = a.length <= b.length ? a : b;
-
-const longer = a.length > b.length ? a : b;
-
-let matchedCount = 0;
-
-for ( const character of shorter ) { if ( longer.includes( character ) )
-{ matchedCount++; } }
-
-const similarity = matchedCount / shorter.length;
-
-return similarity >= 0.9; }
-
-// ===================================== // 比較用文字列整形 //
-=====================================
-
-function normalizeForComparison( text ) { return String( text || “” )
-.replace( /+/g, “” ) .replace( /[。、,.!?！？「」『』（）()]/g, “” )
-.toLowerCase(); }
-
-// ===================================== // JSON文字列整形 //
-=====================================
-
-function cleanJsonText( text ) { return String( text || “” ) .replace(
-/json/gi,       ""     )     .replace(       //g, “” ) .trim(); }
-
-// ===================================== // 点数を0～5へ補正 //
-=====================================
-
-function normalizeScore( value ) { const number = Number(value);
-
-if ( !Number.isFinite( number ) ) { return 0; }
-
-return Math.max( 0, Math.min( 5, Math.round(number) ) ); }
-
-// ===================================== // 文章の空欄補正 //
-=====================================
-
-function normalizeText( value, fallback ) { if ( typeof value !==
-“string” ) { return fallback; }
-
-const text = value.trim();
-
-if (!text) { return fallback; }
-
-return text; }
-
-// ===================================== // nullや空欄の補正 //
-=====================================
-
-function normalizeNullableValue( value ) { if ( value === null || value
-=== undefined || value === “” ) { return “取得できません”; }
-
-return String(value); }
-
-// ===================================== // 本人情報の値を文字列へ補正
+// =====================================
+// 文章類似判定
 // =====================================
 
-function normalizeProfileValue( value ) { if ( value === null || value
-=== undefined ) { return ““; }
+function areTextsSimilar(
+  textA,
+  textB
+) {
+  const a =
+    normalizeForComparison(
+      textA
+    );
 
-return String(value).trim(); }
+  const b =
+    normalizeForComparison(
+      textB
+    );
 
-// ===================================== // 過去履歴用の文字列補正 //
-=====================================
+  if (!a || !b) {
+    return false;
+  }
 
-function normalizeHistoryText( value ) { if ( value === null || value
-=== undefined ) { return ““; }
+  if (a === b) {
+    return true;
+  }
 
-return String(value).trim(); }
+  if (
+    a.includes(b) ||
+    b.includes(a)
+  ) {
+    return true;
+  }
 
-// ===================================== // 過去履歴の合計点補正 //
-=====================================
+  const shorter =
+    a.length <= b.length
+      ? a
+      : b;
 
-function normalizeHistoryTotalScore( value, fallback = 0 ) { const
-number = Number(value);
+  const longer =
+    a.length > b.length
+      ? a
+      : b;
 
-if ( Number.isFinite(number) ) { return Math.max( 0, Math.min( 25,
-Math.round(number) ) ); }
+  let matchedCount = 0;
 
-return Math.max( 0, Math.min( 25, Math.round( Number(fallback) || 0 ) )
-); }
+  for (
+    const character of shorter
+  ) {
+    if (
+      longer.includes(
+        character
+      )
+    ) {
+      matchedCount++;
+    }
+  }
 
-// ===================================== // 小数第1位へ丸める //
-=====================================
+  const similarity =
+    matchedCount /
+    shorter.length;
 
-function roundToOneDecimal( value ) { return Math.round( Number(value) *
-10 ) / 10; }
+  return similarity >= 0.9;
+}
 
-// ===================================== // 文字列が存在するか確認 //
-=====================================
+// =====================================
+// 比較用文字列整形
+// =====================================
 
-function hasText( value ) { return ( typeof value === “string” &&
-value.trim() !== “” ); }
+function normalizeForComparison(
+  text
+) {
+  return String(
+    text || ""
+  )
+    .replace(
+      /\s+/g,
+      ""
+    )
+    .replace(
+      /[。、,.!?！？「」『』（）()]/g,
+      ""
+    )
+    .toLowerCase();
+}
 
-// ===================================== // リクエスト情報ログ //
-=====================================
+// =====================================
+// JSON文字列整形
+// =====================================
 
-function logRequestInformation({ category, memo, userProfile,
-memoryHistory, learnedValueProfile, files, photoContexts }) {
-console.log( “====================================” );
+function cleanJsonText(
+  text
+) {
+  return String(
+    text || ""
+  )
+    .replace(
+      /```json/gi,
+      ""
+    )
+    .replace(
+      /```/g,
+      ""
+    )
+    .trim();
+}
 
-console.log( “思い出AI評価リクエストを受信しました” );
 
-console.log( “サーバーバージョン:”, SERVER_VERSION );
+// =====================================
+// 最初に定義されている値を取得
+// =====================================
 
-console.log( “カテゴリ:”, category );
+function firstDefinedValue(
+  ...values
+) {
+  for (const value of values) {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      return value;
+    }
+  }
 
-console.log( “メモ:”, memo );
+  return undefined;
+}
 
-console.log( “本人情報:”, JSON.stringify( userProfile, null, 2 ) );
+// =====================================
+// 利用者修正点数が存在するか確認
+// =====================================
 
-console.log( “過去の思い出件数:”, memoryHistory.length );
+function hasAnyDefinedScore(
+  values
+) {
+  return values.some(
+    (value) =>
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      Number.isFinite(
+        Number(value)
+      )
+  );
+}
 
-console.log( “学習した価値傾向:”, JSON.stringify( learnedValueProfile,
-null, 2 ) );
+// =====================================
+// プロンプトへ渡す文章の長さを制限
+// =====================================
 
-console.log( “写真枚数:”, files.length );
+function trimPromptText(
+  value,
+  maxLength = MAX_HISTORY_TEXT_LENGTH
+) {
+  const text =
+    String(value || "")
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
 
-console.log( “写真情報:”, JSON.stringify( photoContexts, null, 2 ) );
+  if (!text) {
+    return "";
+  }
 
-console.log( “====================================” ); }
+  if (text.length <= maxLength) {
+    return text;
+  }
 
-// ===================================== // Multerエラー処理 //
-=====================================
+  return (
+    text.slice(
+      0,
+      maxLength
+    ) + "…"
+  );
+}
 
-app.use( ( error, req, res, next ) => { if ( error instanceof
-multer.MulterError ) { console.error( “Multerエラー:”, error );
+// =====================================
+// 点数を0～5へ補正
+// =====================================
+
+function normalizeScore(
+  value
+) {
+  const number =
+    Number(value);
+
+  if (
+    !Number.isFinite(
+      number
+    )
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      5,
+      Math.round(number)
+    )
+  );
+}
+
+// =====================================
+// 文章の空欄補正
+// =====================================
+
+function normalizeText(
+  value,
+  fallback
+) {
+  if (
+    typeof value !== "string"
+  ) {
+    return fallback;
+  }
+
+  const text =
+    value.trim();
+
+  if (!text) {
+    return fallback;
+  }
+
+  return text;
+}
+
+// =====================================
+// nullや空欄の補正
+// =====================================
+
+function normalizeNullableValue(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "取得できません";
+  }
+
+  return String(value);
+}
+
+// =====================================
+// 本人情報の値を文字列へ補正
+// =====================================
+
+function normalizeProfileValue(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+// =====================================
+// 過去履歴用の文字列補正
+// =====================================
+
+function normalizeHistoryText(
+  value
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+// =====================================
+// 過去履歴の合計点補正
+// =====================================
+
+function normalizeHistoryTotalScore(
+  value,
+  fallback = 0
+) {
+  const number =
+    Number(value);
+
+  if (
+    Number.isFinite(number)
+  ) {
+    return Math.max(
+      0,
+      Math.min(
+        25,
+        Math.round(number)
+      )
+    );
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      25,
+      Math.round(
+        Number(fallback) || 0
+      )
+    )
+  );
+}
+
+// =====================================
+// 小数第1位へ丸める
+// =====================================
+
+function roundToOneDecimal(
+  value
+) {
+  return Math.round(
+    Number(value) * 10
+  ) / 10;
+}
+
+// =====================================
+// 文字列が存在するか確認
+// =====================================
+
+function hasText(
+  value
+) {
+  return (
+    typeof value === "string" &&
+    value.trim() !== ""
+  );
+}
+
+// =====================================
+// リクエスト情報ログ
+// =====================================
+
+function logRequestInformation({
+  category,
+  memo,
+  userProfile,
+  memoryHistory,
+  learnedValueProfile,
+  files,
+  photoContexts
+}) {
+  console.log(
+    "===================================="
+  );
+
+  console.log(
+    "思い出AI評価リクエストを受信しました"
+  );
+
+  console.log(
+    "サーバーバージョン:",
+    SERVER_VERSION
+  );
+
+  console.log(
+    "カテゴリ:",
+    category
+  );
+
+  console.log(
+    "メモ:",
+    memo
+  );
+
+  console.log(
+    "本人情報:",
+    JSON.stringify(
+      userProfile,
+      null,
+      2
+    )
+  );
+
+  console.log(
+    "過去の思い出件数:",
+    memoryHistory.length
+  );
+
+  console.log(
+    "学習した価値傾向:",
+    JSON.stringify(
+      learnedValueProfile,
+      null,
+      2
+    )
+  );
+
+  console.log(
+    "写真枚数:",
+    files.length
+  );
+
+  console.log(
+    "写真情報:",
+    JSON.stringify(
+      photoContexts,
+      null,
+      2
+    )
+  );
+
+  console.log(
+    "===================================="
+  );
+}
+
+// =====================================
+// Multerエラー処理
+// =====================================
+
+app.use(
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+    if (
+      error instanceof multer.MulterError
+    ) {
+      console.error(
+        "Multerエラー:",
+        error
+      );
 
       if (
         error.code === "LIMIT_FILE_SIZE"
@@ -1906,14 +3075,19 @@ multer.MulterError ) { console.error( “Multerエラー:”, error );
     }
 
     next();
+  }
+);
 
-} );
+// =====================================
+// サーバー起動
+// =====================================
 
-// ===================================== // サーバー起動 //
-=====================================
-
-app.listen( PORT, () => { console.log(
-“================================” );
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      "================================"
+    );
 
     console.log(
       "Server running!"
@@ -1941,7 +3115,7 @@ app.listen( PORT, () => { console.log(
 
     console.log(
       "個人化:",
-      "本人情報＋過去の思い出履歴"
+      "本人情報＋過去の思い出詳細＋利用者修正点数＋価値傾向"
     );
 
     console.log(
@@ -1952,5 +3126,5 @@ app.listen( PORT, () => { console.log(
     console.log(
       "================================"
     );
-
-} );
+  }
+);
