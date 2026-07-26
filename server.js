@@ -12,7 +12,7 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-25-history-learning-v17-complete";
+const SERVER_VERSION = "memory-value-25-past-connection-v18-complete";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
@@ -156,6 +156,24 @@ const analysisSchema = {
       type: "string",
       description:
         "過去の思い出の傾向を今回の評価へどう反映したか。利用していない場合はその理由"
+    },
+
+    relatedPastMemory: {
+      type: "string",
+      description:
+        "今回の思い出と最も関連する過去の思い出のタイトル。関連がない場合は「なし」"
+    },
+
+    pastConnectionType: {
+      type: "string",
+      description:
+        "過去とのつながりの種類。指定候補から1つ選ぶ"
+    },
+
+    pastConnection: {
+      type: "string",
+      description:
+        "今回の思い出と過去の思い出が、時間的・意味的にどのようにつながっているか"
     }
   },
 
@@ -174,7 +192,10 @@ const analysisSchema = {
     "usedProfileItems",
     "userProfileReason",
     "usedMemoryHistory",
-    "historyReferenceReason"
+    "historyReferenceReason",
+    "relatedPastMemory",
+    "pastConnectionType",
+    "pastConnection"
   ]
 };
 
@@ -433,6 +454,13 @@ app.post(
           learnedValueProfile
         );
 
+      const pastConnection =
+        normalizePastConnection(
+          result,
+          memoryHistory,
+          historyUsage
+        );
+
       /*
         各説明文が同じ文章になった場合は、
         文章部分だけ再生成する。
@@ -520,6 +548,15 @@ app.post(
 
         historyReferenceReason:
           historyUsage.historyReferenceReason,
+
+        relatedPastMemory:
+          pastConnection.relatedPastMemory,
+
+        pastConnectionType:
+          pastConnection.pastConnectionType,
+
+        pastConnection:
+          pastConnection.pastConnection,
 
         learnedValueProfile,
 
@@ -782,6 +819,26 @@ function parseMemoryHistory(
           valueReason:
             normalizeHistoryText(
               memory.valueReason
+            ),
+
+          relatedPastMemory:
+            normalizeHistoryText(
+              memory.relatedPastMemory
+            ),
+
+          pastConnectionType:
+            normalizeHistoryText(
+              memory.pastConnectionType
+            ),
+
+          pastConnection:
+            normalizeHistoryText(
+              memory.pastConnection
+            ),
+
+          historyReferenceReason:
+            normalizeHistoryText(
+              memory.historyReferenceReason
             ),
 
           primaryCriterion:
@@ -1908,6 +1965,46 @@ ${formattedLearnedProfile}
 と記述する
 
 =====================================
+【8：過去とのつながり】
+=====================================
+
+今回の思い出と、過去の思い出一覧の中にある具体的な思い出との間に、
+時間的または意味的なつながりがあるか判断してください。
+
+relatedPastMemory：
+・最も関連する過去の思い出を1件だけ選ぶ
+・過去の思い出一覧にあるタイトルを、そのまま使用する
+・関連する思い出がない場合は「なし」とする
+
+pastConnectionType：
+次の候補から最も近いものを1つだけ選んでください。
+
+・同じ人物
+・同じ場所
+・同じ活動
+・同じカテゴリ
+・成長の継続
+・価値観の変化
+・目標への継続
+・人間関係の深化
+・過去の経験の再解釈
+・人生の節目
+・関連なし
+
+pastConnection：
+・今回の思い出と過去の思い出の共通点、継続、変化を具体的に説明する
+・人物、場所、活動、目標、成長、価値観などの根拠を書く
+・単に「似ている」とだけ書かない
+・過去の記録に存在しない内容を作らない
+・関連がない場合は、なぜ関連が確認できないかを書く
+
+重要：
+・relatedPastMemoryが「なし」の場合、pastConnectionTypeは「関連なし」にする
+・relatedPastMemoryが「なし」の場合、usedMemoryHistoryはfalseにする
+・過去の平均値だけを参考にした場合、具体的な過去の思い出とのつながりがあるとは扱わない
+・過去とのつながりだけを理由に点数を機械的に上げない
+
+=====================================
 【入力情報】
 =====================================
 
@@ -2134,6 +2231,10 @@ rarity：
 ・本人情報を利用していない場合も、userProfileReasonを空文字にしないでください。
 ・usedMemoryHistoryは過去履歴を実際に評価へ使ったかを示してください。
 ・historyReferenceReasonは過去履歴の利用方法または利用しなかった理由を説明してください。
+・relatedPastMemoryは、過去の思い出一覧にあるタイトルまたは「なし」にしてください。
+・pastConnectionTypeは、指定された候補のいずれか1つにしてください。
+・pastConnectionは、現在と過去の具体的な共通点、継続、変化を説明してください。
+・関連がない場合は、relatedPastMemoryを「なし」、pastConnectionTypeを「関連なし」にしてください。
 ・過去履歴の平均点を機械的に今回の点数へ適用しないでください。
 ・各文章を同じ内容にしないでください。
 ・同じ文章を複数項目に書かないでください。
@@ -2314,6 +2415,113 @@ function normalizeHistoryUsage(
   return {
     usedMemoryHistory,
     historyReferenceReason
+  };
+}
+
+// =====================================
+// 過去とのつながり結果の補正
+// =====================================
+
+function normalizePastConnection(
+  result,
+  memoryHistory,
+  historyUsage
+) {
+  const allowedTypes = [
+    "同じ人物",
+    "同じ場所",
+    "同じ活動",
+    "同じカテゴリ",
+    "成長の継続",
+    "価値観の変化",
+    "目標への継続",
+    "人間関係の深化",
+    "過去の経験の再解釈",
+    "人生の節目",
+    "関連なし"
+  ];
+
+  const hasHistory =
+    Array.isArray(memoryHistory) &&
+    memoryHistory.length > 0;
+
+  let relatedPastMemory =
+    normalizeText(
+      result.relatedPastMemory,
+      "なし"
+    );
+
+  let pastConnectionType =
+    normalizeText(
+      result.pastConnectionType,
+      "関連なし"
+    );
+
+  let pastConnection =
+    normalizeText(
+      result.pastConnection,
+      hasHistory
+        ? "今回の思い出と直接関連する過去の経験は確認できませんでした。"
+        : "過去の思い出が登録されていないため、つながりを判定できませんでした。"
+    );
+
+  if (
+    !allowedTypes.includes(
+      pastConnectionType
+    )
+  ) {
+    pastConnectionType =
+      "関連なし";
+  }
+
+  const historyTitles =
+    new Set(
+      memoryHistory
+        .map(
+          (memory) =>
+            normalizeHistoryText(
+              memory.memoryTitle
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const selectedTitleExists =
+    relatedPastMemory !== "なし" &&
+    historyTitles.has(
+      relatedPastMemory
+    );
+
+  if (
+    !hasHistory ||
+    !selectedTitleExists ||
+    pastConnectionType === "関連なし"
+  ) {
+    relatedPastMemory =
+      "なし";
+
+    pastConnectionType =
+      "関連なし";
+
+    if (!pastConnection.trim()) {
+      pastConnection =
+        hasHistory
+          ? "今回の思い出と直接関連する過去の経験は確認できませんでした。"
+          : "過去の思い出が登録されていないため、つながりを判定できませんでした。";
+    }
+  }
+
+  if (
+    relatedPastMemory === "なし"
+  ) {
+    historyUsage.usedMemoryHistory =
+      false;
+  }
+
+  return {
+    relatedPastMemory,
+    pastConnectionType,
+    pastConnection
   };
 }
 
@@ -3115,7 +3323,7 @@ app.listen(
 
     console.log(
       "個人化:",
-      "本人情報＋過去の思い出詳細＋利用者修正点数＋価値傾向"
+      "本人情報＋過去の思い出詳細＋利用者修正点数＋価値傾向＋過去とのつながり"
     );
 
     console.log(
