@@ -1,4 +1,4 @@
-onst express = require("express");
+const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const dotenv = require("dotenv");
@@ -12,7 +12,7 @@ dotenv.config();
 
 const app = express();
 
-const SERVER_VERSION = "memory-value-25-v19";
+const SERVER_VERSION = "memory-value-25-v20-ai-tiebreak";
 const PORT = process.env.PORT || 3000;
 
 const APP_TIME_ZONE = "Asia/Tokyo";
@@ -157,6 +157,17 @@ const analysisSchema = {
       description:
         "過去の思い出の傾向を今回の評価へどう反映したか。利用していない場合はその理由"
     },
+
+    primaryCriterion: {
+      type: "string",
+      enum: ["emotion", "meaning", "relationship", "future", "rarity"],
+      description: "5項目の最高点のうち代表価値を1つ選ぶ。同点の場合は写真・コメント等の具体的根拠で比較し、固定順や過去の好みで決めない"
+    },
+
+    primaryCriterionReason: {
+      type: "string",
+      description: "代表価値を選んだ理由。同点なら候補同士を比較し、写真・コメント等の具体的根拠を示す"
+    },
   },
 
   required: [
@@ -175,6 +186,8 @@ const analysisSchema = {
     "userProfileReason",
     "usedMemoryHistory",
     "historyReferenceReason",
+    "primaryCriterion",
+    "primaryCriterionReason",
   ]
 };
 
@@ -467,6 +480,16 @@ app.post(
       const totalScore =
         calculateScore(scores);
 
+      // 最大得点が同点ならAIの文脈判断を使用。選択が不正な場合のみ再問い合わせする。
+      const primaryResult = await resolvePrimaryCriterion({
+        scores,
+        aiResult: result,
+        category,
+        memo,
+        formattedPhotoContexts,
+        imageParts
+      });
+
       const responseData = {
         status: "ok",
 
@@ -501,6 +524,11 @@ app.post(
           scores.rarity,
 
         totalScore,
+
+        // HTML側の代表価値および砂粒の色に利用する
+        primaryCriterion: primaryResult.primaryCriterion,
+        primaryCriterionReason: primaryResult.primaryCriterionReason,
+        primaryCriterionSource: primaryResult.source,
 
         reason:
           descriptions.reason,
@@ -1816,6 +1844,21 @@ function createAnalysisPrompt({
 「〇点。理由は～」のように説明してください。
 
 =====================================
+【代表価値の選定：primaryCriterion / primaryCriterionReason】
+=====================================
+
+5項目すべてを採点した後、最高点の項目だけを候補として代表価値を1つ選んでください。
+候補キーは emotion（感情）、meaning（学び）、relationship（人間関係）、future（将来への影響）、rarity（希少性）です。
+
+・最高点が1つなら、その項目を primaryCriterion に指定する。
+・最高点が複数なら、写真の具体的な内容と本人のコメントを最優先に比較して、その思い出の中心的な意味を最もよく表す項目を1つ選ぶ。
+・必要に応じて撮影日時・場所・関連予定を補助根拠にする。
+・感情→学びなどの固定的な並び順や利用者が選んだ優先項目で決定してはいけない。
+・写真やコメントから読み取れない事情を推測して断定しない。
+・primaryCriterionReason は、何を根拠にその代表価値を選んだか1～2文で書く。最高点が同点なら候補との比較も記載する。
+・代表価値の選定のために5項目の点数を変更してはいけない。
+
+=====================================
 【6：本人情報の利用確認】
 =====================================
 
@@ -2132,6 +2175,8 @@ rarity：
 ・contextMeaningは付随情報から分かる背景や意味にしてください。
 ・valueReasonは将来残す価値を説明してください。
 ・reasonは点数と採点根拠を説明してください。
+・primaryCriterionは最高得点の候補から選んだ代表価値キーです。
+・primaryCriterionReasonは写真・メモに根拠を置いた代表価値の選定理由です。
 ・usedUserProfileは本人情報を実際に評価へ使ったかを示してください。
 ・usedProfileItemsは利用した本人情報の項目名を示してください。
 ・userProfileReasonは本人情報をどのように評価へ反映したかを説明してください。
@@ -2212,6 +2257,68 @@ function normalizeScores(
         result.rarity
       )
   };
+}
+
+// =====================================
+// 代表価値：AIによる最高点同点時の比較
+// =====================================
+
+const PRIMARY_KEYS = ["emotion", "meaning", "relationship", "future", "rarity"];
+
+async function resolvePrimaryCriterion({ scores, aiResult, category, memo, formattedPhotoContexts, imageParts }) {
+  const highest = Math.max(...PRIMARY_KEYS.map(key => scores[key]));
+  const candidates = PRIMARY_KEYS.filter(key => scores[key] === highest);
+
+  // 同点でなければ採点結果から一意に決まる。
+  if (candidates.length === 1) {
+    return {
+      primaryCriterion: candidates[0],
+      primaryCriterionReason: normalizeText(aiResult.primaryCriterionReason, "5項目中、最も高い評価点の項目です。"),
+      source: "highest-score"
+    };
+  }
+
+  // 初回のGemini応答で同点比較ができていれば追加通信は不要。
+  const chosen = String(aiResult.primaryCriterion || "").trim();
+  const reason = String(aiResult.primaryCriterionReason || "").trim();
+  if (candidates.includes(chosen) && reason) {
+    return { primaryCriterion: chosen, primaryCriterionReason: reason, source: "ai-context" };
+  }
+
+  // 不正な値/理由欠落の場合も固定順にせず、写真を添えてGeminiに再選定を頼む。
+  const retryPrompt = `次の5項目はすでに採点済みです。点数は変更せず、同点の最高得点候補から、
+写真と本人のコメントを最優先に最も中心的な代表価値を1つ選んでください。
+候補以外のキーは選べません。固定順や無根拠な推測では決定しないでください。
+候補：${candidates.join(", ")}
+点数：${JSON.stringify(scores)}
+カテゴリ：${category || "未設定"}
+コメント：${memo || "なし"}
+写真の付随情報：${formattedPhotoContexts}
+primaryCriterion に候補キー、primaryCriterionReason に具体的な比較理由を返してください。`;
+
+  const retry = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [{ role: "user", parts: [{ text: retryPrompt }, ...imageParts] }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          primaryCriterion: { type: "string", enum: candidates },
+          primaryCriterionReason: { type: "string" }
+        },
+        required: ["primaryCriterion", "primaryCriterionReason"]
+      },
+      temperature: 0.3
+    }
+  });
+  const retried = parseGeminiResponse(retry.text || "{}");
+  const retryChoice = String(retried.primaryCriterion || "").trim();
+  const retryReason = String(retried.primaryCriterionReason || "").trim();
+  if (!candidates.includes(retryChoice) || !retryReason) {
+    throw new Error("同点の代表価値をAIが決定できませんでした。固定順による代替は行いません。");
+  }
+  return { primaryCriterion: retryChoice, primaryCriterionReason: retryReason, source: "ai-context-retry" };
 }
 
 // =====================================
